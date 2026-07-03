@@ -1,0 +1,40 @@
+{
+  "name": "@foldkit/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "dependencies": {
+    "@cloudflare/workers-types": "^4.20250805.0",
+    "@effect/platform-bun": "4.0.0-beta.84",
+    "@effect/platform-node": "4.0.0-beta.84",
+    "@effect/sql-pg": "4.0.0-beta.84",
+    "alchemy": "^2.0.0-beta.59",
+    "drizzle-orm": "1.0.0-rc.1",
+    "effect": "4.0.0-beta.84",
+    "pg": "^8.13.0"
+  },
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./Client": {
+      "bun": "./src/Client.ts",
+      "types": "./src/Client.ts",
+      "import": "./src/Client.ts",
+      "default": "./src/Client.ts"
+    }
+  },
+  "scripts": {
+      "build": "tsc -b",
+      "deploy": "alchemy deploy",
+      "dev": "alchemy dev",
+      "destroy": "alchemy destroy",
+      "logs": "alchemy logs",
+      "tail": "alchemy tail",
+      "test": "bun test"
+    }
+}

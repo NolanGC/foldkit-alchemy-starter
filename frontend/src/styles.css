@@ -1,0 +1,181 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f6f7f2;
+  color: #20231f;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 1px solid #1f5f58;
+  background: #1f5f58;
+  color: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 650;
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.shell {
+  width: min(1120px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 32px 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  color: #65716b;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin: 0 0 4px;
+  text-transform: uppercase;
+}
+
+h1 {
+  font-size: 34px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.layout {
+  align-items: start;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: 360px 1fr;
+}
+
+.composer,
+.post,
+.error,
+.empty {
+  background: white;
+  border: 1px solid #dfe4db;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgb(22 28 22 / 0.06);
+}
+
+.composer {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  position: sticky;
+  top: 24px;
+}
+
+.composer h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+}
+
+label span {
+  color: #4e5a54;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+input,
+select,
+textarea {
+  border: 1px solid #ccd5ca;
+  border-radius: 6px;
+  color: #20231f;
+  min-height: 40px;
+  padding: 9px 10px;
+  width: 100%;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.feed {
+  display: grid;
+  gap: 14px;
+}
+
+.post {
+  padding: 18px;
+}
+
+.postHeader {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.post h2 {
+  font-size: 20px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.postHeader span {
+  color: #1f5f58;
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.post p {
+  color: #4b534f;
+  line-height: 1.6;
+  margin: 12px 0 0;
+}
+
+.error,
+.empty {
+  color: #8a2f25;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+}
+
+.empty {
+  color: #65716b;
+}
+
+@media (max-width: 820px) {
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .composer {
+    position: static;
+  }
+}

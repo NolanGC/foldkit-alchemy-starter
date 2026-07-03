@@ -1,29 +1,35 @@
 {
   "name": "foldkit-alchemy-cloudflare-starter",
-  "module": "index.ts",
-  "type": "module",
+  "version": "0.0.0",
   "private": true,
+  "type": "module",
+  "workspaces": ["backend", "frontend"],
   "scripts": {
+    "build": "tsc --noEmit",
     "deploy": "alchemy deploy",
     "dev": "alchemy dev",
     "destroy": "alchemy destroy",
     "test": "bun test"
   },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
   "dependencies": {
+    "@cloudflare/workers-types": "^4.20250805.0",
     "@effect/platform-bun": "4.0.0-beta.84",
     "@effect/platform-node": "4.0.0-beta.84",
     "@effect/sql-pg": "4.0.0-beta.84",
     "alchemy": "^2.0.0-beta.59",
-    "better-auth": "^1.6.2",
     "drizzle-orm": "1.0.0-rc.1",
     "effect": "4.0.0-beta.84",
-    "oxlint": "^1.51.0"
+    "pg": "^8.13.0",
+    "typescript": "^5"
   },
   "devDependencies": {
+    "@types/bun": "latest",
     "@types/pg": "^8.11.0",
     "drizzle-kit": "1.0.0-rc.1"
+  },
+  "overrides": {
+    "@distilled.cloud/cloudflare-runtime": "0.12.0",
+    "@distilled.cloud/cloudflare-vite-plugin": "0.12.0",
+    "@distilled.cloud/cloudflare-rolldown-plugin": "0.12.0"
   }
 }
