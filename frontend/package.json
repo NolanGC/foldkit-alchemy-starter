@@ -5,13 +5,21 @@
   "type": "module",
   "dependencies": {
     "@foldkit/backend": "workspace:*",
+    "@foldkit/devtools": "0.122.1",
     "@foldkit/ui": "^0.122.0",
+    "@tailwindcss/vite": "^4.3.2",
     "alchemy": "^2.0.0-beta.59",
     "effect": "4.0.0-beta.88",
     "foldkit": "^0.122.0",
+    "tailwindcss": "^4.3.2",
     "vite": "8.0.10"
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.10.6",
+    "vitest": "^4.1.9"
   }
 }

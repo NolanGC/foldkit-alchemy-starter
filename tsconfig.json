@@ -2,7 +2,9 @@
   "include": [
     "alchemy.run.ts",
     "backend/src/**/*.ts",
-    "frontend/src/**/*.tsx",
+    "frontend/src/**/*.ts",
+    "frontend/vite.config.ts",
+    "frontend/vitest.config.ts",
     "test/**/*.ts"
   ],
   "compilerOptions": {

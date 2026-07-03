@@ -9,7 +9,7 @@
     "deploy": "alchemy deploy",
     "dev": "alchemy dev",
     "destroy": "alchemy destroy",
-    "test": "bun test"
+    "test": "bun test test/integ.test.ts && bun --cwd frontend test"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20250805.0",
