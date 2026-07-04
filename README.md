@@ -38,7 +38,7 @@ setup and local environment.
 ## Structure
 
 ```txt
-alchemy.run.ts        # shared Alchemy stack (Following the [single stack monorepo Alchemy example](https://github.com/alchemy-run/alchemy-effect/tree/main/examples/monorepo-single-stack))
+alchemy.run.ts        # shared Alchemy stack (following the [single-stack monorepo Alchemy example](https://github.com/alchemy-run/alchemy-effect/tree/main/examples/monorepo-single-stack))
 backend/src/          # Effect HTTP API, Worker service, Drizzle schema
 frontend/src/         # Foldkit app and Foldkit tests
 test/                 # Alchemy integration tests
