@@ -328,13 +328,13 @@ export const view = (model: Model): Document => {
   return {
     title: "Posts",
     body: h.main(
-      [h.Class("min-h-screen bg-slate-950 text-slate-100")],
+      [h.Class("min-h-screen bg-neutral-950 text-neutral-100")],
       [
         h.section(
-          [h.Class("max-w-4xl mx-auto px-4 py-8")],
+          [h.Class("mx-auto max-w-5xl px-4 py-10")],
           [
             h.header(
-              [h.Class("flex items-end justify-between gap-4 mb-6")],
+              [h.Class("mb-8 flex items-end justify-between gap-4")],
               [
                 h.div(
                   [],
@@ -342,7 +342,7 @@ export const view = (model: Model): Document => {
                     h.p(
                       [
                         h.Class(
-                          "mb-1 text-sm font-bold uppercase text-blue-300",
+                          "mb-1 text-sm font-bold uppercase text-neutral-400",
                         ),
                       ],
                       ["Alchemy + Foldkit + Neon"],
@@ -360,7 +360,7 @@ export const view = (model: Model): Document => {
                       [
                         ...attributes.button,
                         h.Class(
-                          "border border-blue-400 bg-blue-500 px-4 py-2 text-white",
+                          "border border-neutral-700 bg-neutral-800 px-4 py-2 font-medium text-neutral-100 hover:bg-neutral-700",
                         ),
                       ],
                       ["Refresh"],
@@ -373,12 +373,20 @@ export const view = (model: Model): Document => {
               M.tagsExhaustive({
                 BlogLoading: () =>
                   h.div(
-                    [h.Class("border border-slate-800 p-4 text-slate-400")],
+                    [
+                      h.Class(
+                        "border border-neutral-800 bg-neutral-900 p-4 text-neutral-400",
+                      ),
+                    ],
                     ["Loading posts..."],
                   ),
                 BlogFailed: ({ error }) =>
                   h.div(
-                    [h.Class("border border-red-900 p-4 text-red-300")],
+                    [
+                      h.Class(
+                        "border border-neutral-800 bg-neutral-900 p-4 text-neutral-300",
+                      ),
+                    ],
                     [error],
                   ),
                 BlogLoaded: ({ data }) => blogView(model, data),
@@ -395,7 +403,7 @@ const blogView = (model: Model, data: BlogData): Html => {
   const h = html<Message>();
 
   return h.section(
-    [h.Class("grid gap-6 md:grid-cols-[320px_1fr] items-start")],
+    [h.Class("grid items-start gap-6 md:grid-cols-[340px_1fr]")],
     [
       composerView(model, data),
       h.div(
@@ -403,7 +411,11 @@ const blogView = (model: Model, data: BlogData): Html => {
         data.posts.length === 0
           ? [
               h.div(
-                [h.Class("border border-slate-800 p-4 text-slate-400")],
+                [
+                  h.Class(
+                    "border border-neutral-800 bg-neutral-900 p-4 text-neutral-400",
+                  ),
+                ],
                 ["No posts yet."],
               ),
             ]
@@ -423,11 +435,13 @@ const composerView = (model: Model, data: BlogData): Html => {
 
   return h.form(
     [
-      h.Class("grid gap-4 border border-slate-800 p-4 md:sticky md:top-6"),
+      h.Class(
+        "grid gap-4 border border-neutral-800 bg-neutral-900 p-4 md:sticky md:top-6",
+      ),
       h.OnSubmit(SubmittedPostForm()),
     ],
     [
-      h.h2([h.Class("text-lg font-bold text-blue-300")], ["Create post"]),
+      h.h2([h.Class("text-lg font-bold text-neutral-200")], ["Create post"]),
       Select.view<Message>({
         id: "author",
         value: model.selectedUserId,
@@ -445,7 +459,7 @@ const composerView = (model: Model, data: BlogData): Html => {
                 [
                   ...attributes.select,
                   h.Class(
-                    "w-full border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100",
+                    "w-full border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100",
                   ),
                 ],
                 data.users.length === 0
@@ -474,7 +488,7 @@ const composerView = (model: Model, data: BlogData): Html => {
               h.input([
                 ...attributes.input,
                 h.Class(
-                  "w-full border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100",
+                  "w-full border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100",
                 ),
               ]),
             ],
@@ -499,7 +513,7 @@ const composerView = (model: Model, data: BlogData): Html => {
                 [
                   ...attributes.textarea,
                   h.Class(
-                    "w-full border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100",
+                    "w-full border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100",
                   ),
                 ],
                 [],
@@ -515,7 +529,7 @@ const composerView = (model: Model, data: BlogData): Html => {
             [
               ...attributes.button,
               h.Class(
-                "border border-blue-400 bg-blue-500 px-4 py-2 text-white disabled:opacity-50",
+                "border border-neutral-700 bg-neutral-800 px-4 py-2 font-medium text-neutral-100 hover:bg-neutral-700 disabled:opacity-50",
               ),
             ],
             [model.isSaving ? "Creating..." : "Create post"],
@@ -524,7 +538,11 @@ const composerView = (model: Model, data: BlogData): Html => {
       model.saveError === ""
         ? h.empty
         : h.div(
-            [h.Class("border border-red-900 p-4 text-red-300")],
+            [
+              h.Class(
+                "border border-neutral-800 bg-neutral-900 p-4 text-neutral-300",
+              ),
+            ],
             [model.saveError],
           ),
     ],
@@ -536,7 +554,10 @@ const postView = (model: Model, post: Post): Html => {
   const isDeleting = model.deletingPostIds.includes(post.id);
 
   return h.article(
-    [h.Class("border border-slate-800 p-4"), h.Key(post.id.toString())],
+    [
+      h.Class("border border-neutral-800 bg-neutral-900 p-4"),
+      h.Key(post.id.toString()),
+    ],
     [
       h.div(
         [h.Class("flex items-start justify-between gap-4")],
@@ -546,7 +567,7 @@ const postView = (model: Model, post: Post): Html => {
             [
               h.h2([h.Class("text-xl font-bold leading-snug")], [post.title]),
               h.span(
-                [h.Class("text-sm font-bold text-blue-300")],
+                [h.Class("text-sm font-bold text-neutral-400")],
                 [post.user.name],
               ),
             ],
@@ -559,7 +580,7 @@ const postView = (model: Model, post: Post): Html => {
                 [
                   ...attributes.button,
                   h.Class(
-                    "border border-red-500 px-3 py-1 text-sm text-red-300 disabled:opacity-50",
+                    "border border-neutral-700 px-3 py-1 text-sm font-medium text-neutral-400 hover:border-neutral-500 hover:text-neutral-200 disabled:opacity-50",
                   ),
                 ],
                 [isDeleting ? "Deleting..." : "Delete"],
@@ -567,7 +588,7 @@ const postView = (model: Model, post: Post): Html => {
           }),
         ],
       ),
-      h.p([h.Class("mt-3 leading-relaxed text-slate-300")], [post.body]),
+      h.p([h.Class("mt-3 leading-relaxed text-neutral-300")], [post.body]),
     ],
   );
 };
