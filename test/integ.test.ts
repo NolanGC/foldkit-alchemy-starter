@@ -67,6 +67,12 @@ test(
     expect(created.title).toBe("Integration test post");
     expect(created.body).toBe("Created through the typed HttpApi client.");
     expect(created.user.id).toBe(selectedUser.id);
+
+    const deleted = yield* client.Blog.deletePost({
+      params: { id: created.id },
+    });
+
+    expect(deleted.id).toBe(created.id);
   }),
   { timeout: 120_000 },
 );

@@ -33,6 +33,10 @@ export const CreatePostInput = Schema.Struct({
   body: Schema.String,
 });
 
+export const DeletePostOutput = Schema.Struct({
+  id: Schema.Number,
+});
+
 export const listBlogData = HttpApiEndpoint.get("listBlogData", "/api/posts", {
   success: BlogData,
 });
@@ -42,8 +46,20 @@ export const createPost = HttpApiEndpoint.post("createPost", "/api/posts", {
   success: Post,
 });
 
+export const deletePost = HttpApiEndpoint.delete(
+  "deletePost",
+  "/api/posts/:id",
+  {
+    params: Schema.Struct({
+      id: Schema.NumberFromString,
+    }),
+    success: DeletePostOutput,
+  },
+);
+
 export class BlogGroup extends HttpApiGroup.make("Blog")
   .add(listBlogData)
-  .add(createPost) {}
+  .add(createPost)
+  .add(deletePost) {}
 
 export class BackendApi extends HttpApi.make("BackendApi").add(BlogGroup) {}

@@ -67,6 +67,20 @@ export default class Service extends Cloudflare.Worker<Service>()(
 
             return { ...post!, user };
           }).pipe(Effect.orDie),
+        )
+        .handle("deletePost", ({ params }) =>
+          Effect.gen(function* () {
+            const [post] = yield* db
+              .delete(Posts)
+              .where(eq(Posts.id, params.id))
+              .returning({ id: Posts.id });
+
+            if (!post) {
+              return yield* Effect.die(`Unknown post ${params.id}`);
+            }
+
+            return post;
+          }).pipe(Effect.orDie),
         ),
     );
 
@@ -78,7 +92,7 @@ export default class Service extends Cloudflare.Worker<Service>()(
           Layer.provide(
             HttpRouter.cors({
               allowedOrigins: ["*"],
-              allowedMethods: ["GET", "POST", "OPTIONS"],
+              allowedMethods: ["GET", "POST", "DELETE", "OPTIONS"],
               allowedHeaders: ["Content-Type", "b3", "traceparent"],
             }),
           ),

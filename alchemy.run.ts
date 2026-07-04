@@ -5,7 +5,6 @@ import * as Neon from "alchemy/Neon";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Path } from "effect/Path";
-import * as Output from "alchemy/Output";
 
 import Service from "./backend/src/Service.ts";
 import { Hyperdrive, NeonDb } from "./backend/src/Db.ts";
@@ -25,14 +24,11 @@ export default Alchemy.Stack(
     const hd = yield* Hyperdrive;
     const backend = yield* Service;
     const path = yield* Path;
-    const browserBackendUrl = Output.map(backend.url.as<string>(), (url) =>
-      url.replace("http://localhost:", "http://127.0.0.1:"),
-    );
 
     const website = yield* Cloudflare.Website.Vite("Website", {
       rootDir: path.resolve(import.meta.dirname, "frontend"),
       env: {
-        VITE_API_URL: browserBackendUrl,
+        VITE_API_URL: backend.url.as<string>(),
       },
     });
 

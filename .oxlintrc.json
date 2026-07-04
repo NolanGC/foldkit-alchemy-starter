@@ -1,0 +1,9 @@
+{
+  "ignorePatterns": [
+    ".alchemy/**",
+    "dist/**",
+    "frontend/dist/**",
+    "node_modules/**",
+    "**/*.tsbuildinfo"
+  ]
+}
