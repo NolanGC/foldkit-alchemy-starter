@@ -1,4 +1,4 @@
-# WIP - Foldkit Alchemy Cloudflare Starter
+# WIP - Foldkit+Alchemy Starter
 
 A small full-stack starter that combines Foldkit and Alchemy for building
 apps end-to-end with Effect.
