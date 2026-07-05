@@ -1,7 +1,7 @@
 import { Story } from "foldkit";
 import { type Url } from "foldkit/url";
 import { describe, expect, test } from "vitest";
-import { Option } from "effect";
+import { DateTime, Option } from "effect";
 
 import {
   BlogLoaded,
@@ -64,6 +64,8 @@ const blogData = {
   posts: [firstPost],
 };
 
+const zonedNow = DateTime.makeZonedUnsafe(0, { timeZone: "UTC" });
+
 const url = (pathname: string): Url => ({
   protocol: "http:",
   host: "localhost",
@@ -82,7 +84,7 @@ const loadingModel: Model = {
   body: "",
   isSaving: false,
   deletingPostIds: [],
-  saveError: "",
+  maybeActionError: Option.none(),
 };
 
 const loadedModel: Model = {
@@ -160,7 +162,7 @@ describe("update", () => {
         expect(model.title).toBe("");
         expect(model.body).toBe("");
         expect(model.isSaving).toBe(false);
-        expect(model.saveError).toBe("");
+        expect(model.maybeActionError).toEqual(Option.none());
       }),
     );
   });
@@ -172,7 +174,9 @@ describe("update", () => {
       Story.message(SubmittedPostForm()),
       Story.Command.expectNone(),
       Story.model((model) => {
-        expect(model.saveError).toBe("Title and body are required.");
+        expect(model.maybeActionError).toEqual(
+          Option.some("Title and body are required."),
+        );
       }),
     );
   });
@@ -202,7 +206,9 @@ describe("update", () => {
         expect(model.title).toBe("New post");
         expect(model.body).toBe("Created from the Foldkit form.");
         expect(model.isSaving).toBe(false);
-        expect(model.saveError).toBe("Backend rejected the post.");
+        expect(model.maybeActionError).toEqual(
+          Option.some("Backend rejected the post."),
+        );
       }),
     );
   });
@@ -246,7 +252,9 @@ describe("update", () => {
       ),
       Story.model((model) => {
         expect(model.deletingPostIds).toEqual([]);
-        expect(model.saveError).toBe("Backend rejected delete.");
+        expect(model.maybeActionError).toEqual(
+          Option.some("Backend rejected delete."),
+        );
         expect(model.blog._tag).toBe("BlogLoaded");
         if (model.blog._tag === "BlogLoaded") {
           expect(model.blog.data.posts).toEqual([firstPost]);
@@ -264,11 +272,16 @@ describe("update", () => {
       }),
       Story.message(
         GotChatMessage({
-          message: Chat.ReceivedMessage({ text: "[user] hello" }),
+          message: Chat.TimestampedMessage({
+            text: "[user] hello",
+            zoned: zonedNow,
+          }),
         }),
       ),
       Story.model((model) => {
-        expect(model.chatPage.messages).toEqual([{ text: "[user] hello" }]);
+        expect(model.chatPage.messages).toEqual([
+          { text: "[user] hello", zoned: zonedNow },
+        ]);
       }),
     );
   });
@@ -281,11 +294,7 @@ describe("chat update", () => {
   };
 
   test("submitting a connected chat message sends and clears the input", () => {
-    const sendMessageCommand = Chat.SendMessage({
-      roomId: connectedChat.roomId,
-      senderId: connectedChat.clientId,
-      text: "hello",
-    });
+    const sendMessageCommand = Chat.SendMessage({ text: "hello" });
 
     Story.story(
       Chat.update,
@@ -311,13 +320,20 @@ describe("chat update", () => {
     );
   });
 
-  test("received chat messages are appended", () => {
+  test("received chat messages are timestamped and appended", () => {
     Story.story(
       Chat.update,
       Story.with(connectedChat),
       Story.message(Chat.ReceivedMessage({ text: "[abc] hello" })),
+      Story.Command.expectExact(Chat.TimestampMessage({ text: "[abc] hello" })),
+      Story.Command.resolve(
+        Chat.TimestampMessage,
+        Chat.TimestampedMessage({ text: "[abc] hello", zoned: zonedNow }),
+      ),
       Story.model((model) => {
-        expect(model.messages).toEqual([{ text: "[abc] hello" }]);
+        expect(model.messages).toEqual([
+          { text: "[abc] hello", zoned: zonedNow },
+        ]);
       }),
     );
   });

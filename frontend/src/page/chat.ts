@@ -1,5 +1,7 @@
 import { Button, Input } from "@foldkit/ui";
 import {
+  Array,
+  DateTime,
   Duration,
   Effect,
   Match as M,
@@ -7,7 +9,7 @@ import {
   Queue,
   Schema as S,
   Stream,
-  String as Str,
+  String as String_,
 } from "effect";
 import { Command, ManagedResource, Submodel, Subscription } from "foldkit";
 import { html, type Html } from "foldkit/html";
@@ -17,10 +19,20 @@ import { evo } from "foldkit/struct";
 
 const CONNECTION_TIMEOUT_MS = 5000;
 
+const CHAT_SERVICE_URL = import.meta.env.VITE_CHAT_SERVICE_URL;
+if (CHAT_SERVICE_URL === undefined) {
+  throw new Error("VITE_CHAT_SERVICE_URL is not set.");
+}
+
+const getZonedTime = DateTime.now.pipe(
+  Effect.map((utc) => DateTime.setZone(utc, DateTime.zoneMakeLocal())),
+);
+
 // MODEL
 
 export const ChatMessage = S.Struct({
   text: S.String,
+  zoned: S.DateTimeZoned,
 });
 export type ChatMessage = typeof ChatMessage.Type;
 
@@ -61,6 +73,10 @@ export const SucceededSendMessage = m("SucceededSendMessage", {
   text: S.String,
 });
 export const ReceivedMessage = m("ReceivedMessage", { text: S.String });
+export const TimestampedMessage = m("TimestampedMessage", {
+  text: S.String,
+  zoned: S.DateTimeZoned,
+});
 
 export const Message = S.Union([
   Connected,
@@ -70,6 +86,7 @@ export const Message = S.Union([
   SubmittedMessage,
   SucceededSendMessage,
   ReceivedMessage,
+  TimestampedMessage,
 ]);
 export type Message = typeof Message.Type;
 
@@ -113,6 +130,14 @@ export const SendMessage = Command.define(
   ),
 );
 
+export const TimestampMessage = Command.define(
+  "TimestampMessage",
+  { text: S.String },
+  TimestampedMessage,
+)(({ text }) =>
+  getZonedTime.pipe(Effect.map((zoned) => TimestampedMessage({ text, zoned }))),
+);
+
 // UPDATE
 
 type UpdateReturn = readonly [
@@ -149,7 +174,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         const text = model.messageInput.trim();
 
         if (
-          Str.isEmpty(text) ||
+          String_.isEmpty(text) ||
           model.connection._tag !== "ConnectionConnected"
         ) {
           return [model, []];
@@ -163,9 +188,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
       SucceededSendMessage: () => [model, []],
 
-      ReceivedMessage: ({ text }) => [
+      ReceivedMessage: ({ text }) => [model, [TimestampMessage({ text })]],
+
+      TimestampedMessage: ({ text, zoned }) => [
         evo(model, {
-          messages: (messages) => [...messages, ChatMessage.make({ text })],
+          messages: (messages) => [
+            ...messages,
+            ChatMessage.make({ text, zoned }),
+          ],
         }),
         [],
       ],
@@ -185,7 +215,10 @@ export const managedResources = ManagedResource.make<Model, Message>()(
           : Option.none(),
       acquire: ({ roomId }) =>
         Effect.callback<WebSocket, Error>((resume) => {
-          const socket = new WebSocket(chatWebSocketUrl(roomId));
+          const url = new URL(CHAT_SERVICE_URL);
+          url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+          url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
+          const socket = new WebSocket(url);
 
           const handleOpen = () => {
             socket.removeEventListener("error", handleError);
@@ -226,24 +259,6 @@ export const managedResources = ManagedResource.make<Model, Message>()(
 
 // SUBSCRIPTION
 
-const toTextMessage = (data: MessageEvent["data"]): string => {
-  if (typeof data === "string") return data;
-  if (data instanceof ArrayBuffer) {
-    return new TextDecoder().decode(data);
-  }
-  throw new Error("Unsupported WebSocket message type");
-};
-const chatWebSocketUrl = (roomId: string): string => {
-  const chatUrl = import.meta.env.VITE_CHAT_SERVICE_URL;
-  if (chatUrl === undefined) {
-    throw new Error("No chat service url found in environment.")
-  }
-  const url = new URL(chatUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
-  return url.toString();
-};
-
 const streamChatSocketMessages = (socket: WebSocket) =>
   Stream.callback<
     | typeof ReceivedMessage.Type
@@ -253,14 +268,20 @@ const streamChatSocketMessages = (socket: WebSocket) =>
     Effect.acquireRelease(
       Effect.sync(() => {
         const handleMessage = (event: MessageEvent) => {
-          Queue.offerUnsafe(queue, ReceivedMessage({ text: toTextMessage(event.data) }));
+          if (typeof event.data !== "string") {
+            return;
+          }
+          Queue.offerUnsafe(queue, ReceivedMessage({ text: event.data }));
         };
         const handleClose = () => {
           Queue.offerUnsafe(queue, Disconnected());
           Queue.endUnsafe(queue);
         };
         const handleError = () => {
-          Queue.offerUnsafe(queue, FailedConnect({ error: "Connection error" }));
+          Queue.offerUnsafe(
+            queue,
+            FailedConnect({ error: "Connection error" }),
+          );
           Queue.endUnsafe(queue);
         };
 
@@ -323,9 +344,10 @@ export const view = Submodel.defineView<Model, Message>((model): Html => {
               h.div(
                 [],
                 [
-                  h.h1([h.Class("text-2xl font-bold")], [
-                    `Room: ${model.roomId}`,
-                  ]),
+                  h.h1(
+                    [h.Class("text-2xl font-bold")],
+                    [`Room: ${model.roomId}`],
+                  ),
                   connectionStatusView(model.connection),
                 ],
               ),
@@ -351,7 +373,10 @@ const connectionStatusView = (connection: ConnectionState): Html => {
       ConnectionConnected: () =>
         h.p([h.Class("mt-1 text-sm text-neutral-400")], ["Connected"]),
       ConnectionError: ({ error }) =>
-        h.p([h.Class("mt-1 text-sm text-neutral-400")], [error]),
+        h.p(
+          [h.Class("mt-1 text-sm text-neutral-400"), h.Role("alert")],
+          [error],
+        ),
     }),
   );
 };
@@ -360,40 +385,53 @@ const messagesView = (messages: ReadonlyArray<ChatMessage>): Html => {
   const h = html<Message>();
 
   return h.div(
-    [
-      h.Class(
-        "flex min-h-0 flex-1 flex-col justify-end gap-3 overflow-y-auto",
-      ),
-    ],
-    messages.length === 0
-      ? [
-          h.div(
-            [
-              h.Class(
-                "self-start border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-400",
-              ),
-            ],
-            ["No messages yet."],
-          ),
-        ]
-      : messages.map((message, index) =>
-          h.keyed("div")(
-            `${index}:${message.text}`,
-            [
-              h.Class(
-                "self-start border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300",
-              ),
-            ],
-            [message.text],
+    [h.Class("flex min-h-0 flex-1 flex-col justify-end overflow-y-auto")],
+    Array.match(messages, {
+      onEmpty: () => [
+        h.div(
+          [
+            h.Class(
+              "self-start border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-400",
+            ),
+          ],
+          ["No messages yet."],
+        ),
+      ],
+      onNonEmpty: (messages) => [
+        h.ul(
+          [h.Class("flex flex-col gap-3")],
+          Array.map(messages, (message) =>
+            h.li(
+              [
+                h.Class(
+                  "self-start border border-neutral-800 bg-neutral-900 px-4 py-3",
+                ),
+              ],
+              [
+                h.p([h.Class("break-words text-neutral-300")], [message.text]),
+                h.p(
+                  [h.Class("mt-1 text-xs text-neutral-500")],
+                  [
+                    DateTime.format(message.zoned, {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    }),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
+      ],
+    }),
   );
 };
 
 const messageInputView = (model: Model): Html => {
   const h = html<Message>();
   const isConnected = model.connection._tag === "ConnectionConnected";
-  const canSend = isConnected && !Str.isEmpty(model.messageInput.trim());
+  const canSend = isConnected && !String_.isEmpty(model.messageInput.trim());
 
   return h.form(
     [

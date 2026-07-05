@@ -1,5 +1,6 @@
 import { Scene } from "foldkit";
 import { describe, test } from "vitest";
+import { Option } from "effect";
 
 import {
   BlogLoaded,
@@ -60,7 +61,7 @@ const loadedModel: Model = {
   body: "",
   isSaving: false,
   deletingPostIds: [],
-  saveError: "",
+  maybeActionError: Option.none(),
 };
 
 describe("view", () => {
@@ -134,6 +135,23 @@ describe("view", () => {
       Scene.expect(Scene.text("Room: general")).toExist(),
       Scene.expect(Scene.text("No messages yet.")).toExist(),
       Scene.expect(Scene.label("Message")).toExist(),
+      Scene.expect(Scene.role("button", { name: "Send" })).toBeDisabled(),
+    );
+  });
+
+  test("chat connection errors are announced", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({
+        ...loadedModel,
+        route: ChatRoute({ roomId: "general" }),
+        chatPage: {
+          ...loadedModel.chatPage,
+          connection: Chat.ConnectionError({ error: "Connection timeout" }),
+        },
+      }),
+      Scene.expect(Scene.role("alert")).toExist(),
+      Scene.expect(Scene.text("Connection timeout")).toExist(),
       Scene.expect(Scene.role("button", { name: "Send" })).toBeDisabled(),
     );
   });

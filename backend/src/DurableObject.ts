@@ -19,11 +19,9 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
 
       const broadcast = (text: string) =>
         Effect.gen(function* () {
-          yield* Effect.forEach(
-            sessions.values(),
-            (peer) => peer.send(text),
-            { concurrency: 32 },
-          );
+          yield* Effect.forEach(sessions.values(), (peer) => peer.send(text), {
+            concurrency: 32,
+          });
         });
 
       return {

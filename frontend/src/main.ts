@@ -6,7 +6,7 @@ import {
 } from "@foldkit/backend";
 import { BackendClient } from "@foldkit/backend/Client";
 import { Button, Input, Select, Textarea } from "@foldkit/ui";
-import { Effect, Match as M, Option, Schema as S } from "effect";
+import { Array, Effect, Match as M, Option, Schema as S } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import { Command, ManagedResource, Runtime, Subscription } from "foldkit";
 import { html, type Document, type Html } from "foldkit/html";
@@ -38,7 +38,7 @@ export const Model = S.Struct({
   body: S.String,
   isSaving: S.Boolean,
   deletingPostIds: S.Array(S.Number),
-  saveError: S.String,
+  maybeActionError: S.Option(S.String),
 });
 export type Model = typeof Model.Type;
 
@@ -117,7 +117,7 @@ export const init: Runtime.RoutingApplicationInit<Model, Message> = (url) => {
       body: "",
       isSaving: false,
       deletingPostIds: [],
-      saveError: "",
+      maybeActionError: Option.none(),
     },
     [FetchBlogData()],
   ];
@@ -200,6 +200,44 @@ type UpdateReturn = readonly [
 ];
 const withUpdateReturn = M.withReturnType<UpdateReturn>();
 
+const whenSubmittedPostForm = (model: Model): UpdateReturn => {
+  if (model.blog._tag !== "BlogLoaded" || model.isSaving) {
+    return [model, []];
+  }
+
+  const title = model.title.trim();
+  const body = model.body.trim();
+
+  if (title === "" || body === "") {
+    return [
+      evo(model, {
+        maybeActionError: () => Option.some("Title and body are required."),
+      }),
+      [],
+    ];
+  }
+
+  const userId = Number(model.selectedUserId);
+  const author = model.blog.data.users.find((user) => user.id === userId);
+
+  if (author === undefined) {
+    return [
+      evo(model, {
+        maybeActionError: () => Option.some("Select an author."),
+      }),
+      [],
+    ];
+  }
+
+  return [
+    evo(model, {
+      isSaving: () => true,
+      maybeActionError: () => Option.none(),
+    }),
+    [CreatePost({ userId: author.id, title, body })],
+  ];
+};
+
 export const update = (model: Model, message: Message): UpdateReturn =>
   M.value(message).pipe(
     withUpdateReturn,
@@ -248,7 +286,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       ClickedRefresh: () => [
         evo(model, {
           blog: () => BlogLoading(),
-          saveError: () => "",
+          maybeActionError: () => Option.none(),
         }),
         [FetchBlogData()],
       ],
@@ -261,7 +299,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       UpdatedTitle: ({ value }) => [
         evo(model, {
           title: () => value,
-          saveError: () => "",
+          maybeActionError: () => Option.none(),
         }),
         [],
       ],
@@ -269,48 +307,12 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       UpdatedBody: ({ value }) => [
         evo(model, {
           body: () => value,
-          saveError: () => "",
+          maybeActionError: () => Option.none(),
         }),
         [],
       ],
 
-      SubmittedPostForm: () => {
-        if (model.blog._tag !== "BlogLoaded" || model.isSaving) {
-          return [model, []];
-        }
-
-        const title = model.title.trim();
-        const body = model.body.trim();
-
-        if (title === "" || body === "") {
-          return [
-            evo(model, {
-              saveError: () => "Title and body are required.",
-            }),
-            [],
-          ];
-        }
-
-        const userId = Number(model.selectedUserId);
-        const author = model.blog.data.users.find((user) => user.id === userId);
-
-        if (author === undefined) {
-          return [
-            evo(model, {
-              saveError: () => "Select an author.",
-            }),
-            [],
-          ];
-        }
-
-        return [
-          evo(model, {
-            isSaving: () => true,
-            saveError: () => "",
-          }),
-          [CreatePost({ userId: author.id, title, body })],
-        ];
-      },
+      SubmittedPostForm: () => whenSubmittedPostForm(model),
 
       ClickedDeletePost: ({ postId }) => {
         if (
@@ -323,7 +325,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         return [
           evo(model, {
             deletingPostIds: (postIds) => [...postIds, postId],
-            saveError: () => "",
+            maybeActionError: () => Option.none(),
           }),
           [DeletePost({ postId })],
         ];
@@ -361,7 +363,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           title: () => "",
           body: () => "",
           isSaving: () => false,
-          saveError: () => "",
+          maybeActionError: () => Option.none(),
         }),
         [],
       ],
@@ -369,7 +371,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       FailedCreatePost: ({ error }) => [
         evo(model, {
           isSaving: () => false,
-          saveError: () => error,
+          maybeActionError: () => Option.some(error),
         }),
         [],
       ],
@@ -387,7 +389,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
               : blog,
           deletingPostIds: (postIds) =>
             postIds.filter((currentPostId) => currentPostId !== postId),
-          saveError: () => "",
+          maybeActionError: () => Option.none(),
         }),
         [],
       ],
@@ -396,7 +398,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         evo(model, {
           deletingPostIds: (postIds) =>
             postIds.filter((currentPostId) => currentPostId !== postId),
-          saveError: () => error,
+          maybeActionError: () => Option.some(error),
         }),
         [],
       ],
@@ -549,6 +551,7 @@ const postsView = (model: Model): Html => {
                 h.Class(
                   "border border-neutral-800 bg-neutral-900 p-4 text-neutral-300",
                 ),
+                h.Role("alert"),
               ],
               [error],
             ),
@@ -610,18 +613,20 @@ const blogView = (model: Model, data: BlogData): Html => {
       composerView(model, data),
       h.div(
         [h.Class("grid gap-4")],
-        data.posts.length === 0
-          ? [
-              h.div(
-                [
-                  h.Class(
-                    "border border-neutral-800 bg-neutral-900 p-4 text-neutral-400",
-                  ),
-                ],
-                ["No posts yet."],
-              ),
-            ]
-          : data.posts.map((post) => postView(model, post)),
+        Array.match(data.posts, {
+          onEmpty: () => [
+            h.div(
+              [
+                h.Class(
+                  "border border-neutral-800 bg-neutral-900 p-4 text-neutral-400",
+                ),
+              ],
+              ["No posts yet."],
+            ),
+          ],
+          onNonEmpty: (posts) =>
+            Array.map(posts, (post) => postView(model, post)),
+        }),
       ),
     ],
   );
@@ -631,7 +636,7 @@ const composerView = (model: Model, data: BlogData): Html => {
   const h = html<Message>();
   const canSubmit =
     !model.isSaving &&
-    data.users.length > 0 &&
+    Array.isReadonlyArrayNonEmpty(data.users) &&
     model.title.trim() !== "" &&
     model.body.trim() !== "";
 
@@ -648,7 +653,7 @@ const composerView = (model: Model, data: BlogData): Html => {
         id: "author",
         value: model.selectedUserId,
         onChange: (userId) => UpdatedSelectedUser({ userId }),
-        isDisabled: model.isSaving || data.users.length === 0,
+        isDisabled: model.isSaving || Array.isReadonlyArrayEmpty(data.users),
         toView: (attributes) =>
           h.div(
             [h.Class("grid gap-1")],
@@ -664,11 +669,13 @@ const composerView = (model: Model, data: BlogData): Html => {
                     "w-full border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100",
                   ),
                 ],
-                data.users.length === 0
-                  ? [h.option([h.Value("")], ["No users"])]
-                  : data.users.map((user) =>
+                Array.match(data.users, {
+                  onEmpty: () => [h.option([h.Value("")], ["No users"])],
+                  onNonEmpty: (users) =>
+                    Array.map(users, (user) =>
                       h.option([h.Value(user.id.toString())], [user.name]),
                     ),
+                }),
               ),
             ],
           ),
@@ -737,16 +744,19 @@ const composerView = (model: Model, data: BlogData): Html => {
             [model.isSaving ? "Creating..." : "Create post"],
           ),
       }),
-      model.saveError === ""
-        ? h.empty
-        : h.div(
+      Option.match(model.maybeActionError, {
+        onNone: () => h.empty,
+        onSome: (error) =>
+          h.div(
             [
               h.Class(
                 "border border-neutral-800 bg-neutral-900 p-4 text-neutral-300",
               ),
+              h.Role("alert"),
             ],
-            [model.saveError],
+            [error],
           ),
+      }),
     ],
   );
 };
@@ -755,11 +765,9 @@ const postView = (model: Model, post: Post): Html => {
   const h = html<Message>();
   const isDeleting = model.deletingPostIds.includes(post.id);
 
-  return h.article(
-    [
-      h.Class("border border-neutral-800 bg-neutral-900 p-4"),
-      h.Key(post.id.toString()),
-    ],
+  return h.keyed("article")(
+    post.id.toString(),
+    [h.Class("border border-neutral-800 bg-neutral-900 p-4")],
     [
       h.div(
         [h.Class("flex items-start justify-between gap-4")],
