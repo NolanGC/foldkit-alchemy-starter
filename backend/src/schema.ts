@@ -24,6 +24,17 @@ export const Posts = pgTable("posts", {
 });
 export type Post = typeof Posts.$inferSelect;
 
+export const ChatMessages = pgTable("chat_messages", {
+  id: serial("id").primaryKey(),
+  roomId: text("room_id").notNull(),
+  senderId: text("sender_id").notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+export type ChatMessage = typeof ChatMessages.$inferSelect;
+
 export const relations = defineRelations({ Users, Posts }, (t) => ({
   Users: {
     posts: t.many.Posts(),

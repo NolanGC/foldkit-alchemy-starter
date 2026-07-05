@@ -11,6 +11,8 @@ import {
   view,
   type Model,
 } from "./main";
+import { Chat } from "./page";
+import { ChatRoute, PostsRoute } from "./route";
 
 const ada = {
   id: 1,
@@ -45,6 +47,8 @@ const createdPost = {
 };
 
 const loadedModel: Model = {
+  route: PostsRoute(),
+  chatPage: Chat.init("general"),
   blog: BlogLoaded({
     data: {
       users: [ada, grace],
@@ -111,6 +115,26 @@ describe("view", () => {
         SucceededDeletePost({ postId: firstPost.id }),
       ),
       Scene.expect(Scene.text("Seed post")).toBeAbsent(),
+    );
+  });
+
+  test("chat route renders a message column and centered textbox", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({
+        ...loadedModel,
+        route: ChatRoute({ roomId: "general" }),
+        chatPage: {
+          ...loadedModel.chatPage,
+          connection: Chat.ConnectionConnected(),
+        },
+      }),
+      Scene.expect(Scene.role("link", { name: "Posts" })).toExist(),
+      Scene.expect(Scene.role("link", { name: "Chat" })).toExist(),
+      Scene.expect(Scene.text("Room: general")).toExist(),
+      Scene.expect(Scene.text("No messages yet.")).toExist(),
+      Scene.expect(Scene.label("Message")).toExist(),
+      Scene.expect(Scene.role("button", { name: "Send" })).toBeDisabled(),
     );
   });
 });

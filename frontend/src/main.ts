@@ -6,13 +6,18 @@ import {
 } from "@foldkit/backend";
 import { BackendClient } from "@foldkit/backend/Client";
 import { Button, Input, Select, Textarea } from "@foldkit/ui";
-import { Effect, Match as M, Schema as S } from "effect";
+import { Effect, Match as M, Option, Schema as S } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import { Command, Runtime } from "foldkit";
+import { Command, ManagedResource, Runtime, Subscription } from "foldkit";
 import { html, type Document, type Html } from "foldkit/html";
 import { m } from "foldkit/message";
+import { UrlRequest, load, pushUrl } from "foldkit/navigation";
 import { ts } from "foldkit/schema";
 import { evo } from "foldkit/struct";
+import { Url, toString as urlToString } from "foldkit/url";
+
+import { Chat } from "./page";
+import { AppRoute, chatRouter, postsRouter, urlToAppRoute } from "./route";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
 
@@ -25,6 +30,8 @@ export const BlogFailed = ts("BlogFailed", { error: S.String });
 const BlogState = S.Union([BlogLoading, BlogLoaded, BlogFailed]);
 
 export const Model = S.Struct({
+  route: AppRoute,
+  chatPage: Chat.Model,
   blog: BlogState,
   selectedUserId: S.String,
   title: S.String,
@@ -37,6 +44,15 @@ export type Model = typeof Model.Type;
 
 // MESSAGE
 
+export const CompletedNavigateInternal = m("CompletedNavigateInternal");
+export const CompletedLoadExternal = m("CompletedLoadExternal");
+export const ClickedLink = m("ClickedLink", {
+  request: UrlRequest,
+});
+export const ChangedUrl = m("ChangedUrl", { url: Url });
+export const GotChatMessage = m("GotChatMessage", {
+  message: Chat.Message,
+});
 export const ClickedRefresh = m("ClickedRefresh");
 export const UpdatedSelectedUser = m("UpdatedSelectedUser", {
   userId: S.String,
@@ -66,6 +82,11 @@ export const FailedDeletePost = m("FailedDeletePost", {
 });
 
 export const Message = S.Union([
+  CompletedNavigateInternal,
+  CompletedLoadExternal,
+  ClickedLink,
+  ChangedUrl,
+  GotChatMessage,
   ClickedRefresh,
   UpdatedSelectedUser,
   UpdatedTitle,
@@ -83,22 +104,40 @@ export type Message = typeof Message.Type;
 
 // INIT
 
-export const init: Runtime.ApplicationInit<Model, Message> = () => [
-  {
-    blog: BlogLoading(),
-    selectedUserId: "",
-    title: "",
-    body: "",
-    isSaving: false,
-    deletingPostIds: [],
-    saveError: "",
-  },
-  [FetchBlogData()],
-];
+export const init: Runtime.RoutingApplicationInit<Model, Message> = (url) => {
+  const route = urlToAppRoute(url);
+
+  return [
+    {
+      route,
+      chatPage: Chat.init(route._tag === "Chat" ? route.roomId : "general"),
+      blog: BlogLoading(),
+      selectedUserId: "",
+      title: "",
+      body: "",
+      isSaving: false,
+      deletingPostIds: [],
+      saveError: "",
+    },
+    [FetchBlogData()],
+  ];
+};
 
 // COMMAND
 
 const backend = BackendClient(API_URL);
+
+const NavigateInternal = Command.define(
+  "NavigateInternal",
+  { url: S.String },
+  CompletedNavigateInternal,
+)(({ url }) => pushUrl(url).pipe(Effect.as(CompletedNavigateInternal())));
+
+const LoadExternal = Command.define(
+  "LoadExternal",
+  { href: S.String },
+  CompletedLoadExternal,
+)(({ href }) => load(href).pipe(Effect.as(CompletedLoadExternal())));
 
 export const FetchBlogData = Command.define(
   "FetchBlogData",
@@ -155,13 +194,57 @@ export const DeletePost = Command.define(
 
 // UPDATE
 
-type UpdateReturn = readonly [Model, ReadonlyArray<Command.Command<Message>>];
+type UpdateReturn = readonly [
+  Model,
+  ReadonlyArray<Command.Command<Message, never, Chat.ChatSocketService>>,
+];
 const withUpdateReturn = M.withReturnType<UpdateReturn>();
 
 export const update = (model: Model, message: Message): UpdateReturn =>
   M.value(message).pipe(
     withUpdateReturn,
     M.tagsExhaustive({
+      CompletedNavigateInternal: () => [model, []],
+      CompletedLoadExternal: () => [model, []],
+
+      ClickedLink: ({ request }) =>
+        M.value(request).pipe(
+          withUpdateReturn,
+          M.tagsExhaustive({
+            Internal: ({ url }) => [
+              model,
+              [NavigateInternal({ url: urlToString(url) })],
+            ],
+            External: ({ href }) => [model, [LoadExternal({ href })]],
+          }),
+        ),
+
+      ChangedUrl: ({ url }) => {
+        const route = urlToAppRoute(url);
+
+        return [
+          evo(model, {
+            route: () => route,
+            chatPage: (chatPage) =>
+              route._tag === "Chat"
+                ? Chat.connect(chatPage, route.roomId)
+                : chatPage,
+          }),
+          [],
+        ];
+      },
+
+      GotChatMessage: ({ message }) => {
+        const [chatPage, commands] = Chat.update(model.chatPage, message);
+
+        return [
+          evo(model, { chatPage: () => chatPage }),
+          Command.mapMessages(commands, (message) =>
+            GotChatMessage({ message }),
+          ),
+        ];
+      },
+
       ClickedRefresh: () => [
         evo(model, {
           blog: () => BlogLoading(),
@@ -320,84 +403,203 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
   );
 
+// MANAGED RESOURCES
+
+export const managedResources = ManagedResource.lift(Chat.managedResources)<
+  Model,
+  Message
+>({
+  toChildModel: (model) =>
+    model.route._tag === "Chat" ? Option.some(model.chatPage) : Option.none(),
+  toParentMessage: (message) => GotChatMessage({ message }),
+});
+
+// SUBSCRIPTIONS
+
+export const subscriptions = Subscription.lift(Chat.subscriptions)<
+  Model,
+  Message
+>({
+  toChildModel: (model) => model.chatPage,
+  toParentMessage: (message) => GotChatMessage({ message }),
+});
+
 // VIEW
+
+const navigationView = (currentRoute: AppRoute): Html => {
+  const h = html<Message>();
+
+  const linkClassName = (isActive: boolean) =>
+    `px-3 py-2 text-sm font-medium ${isActive ? "bg-neutral-800 text-neutral-100" : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"}`;
+
+  return h.nav(
+    [h.Class("border-b border-neutral-900")],
+    [
+      h.ul(
+        [h.Class("mx-auto flex max-w-5xl gap-2 px-4 py-3")],
+        [
+          h.li(
+            [],
+            [
+              h.a(
+                [
+                  h.Href(postsRouter()),
+                  h.Class(linkClassName(currentRoute._tag === "Posts")),
+                ],
+                ["Posts"],
+              ),
+            ],
+          ),
+          h.li(
+            [],
+            [
+              h.a(
+                [
+                  h.Href(chatRouter({ roomId: "general" })),
+                  h.Class(linkClassName(currentRoute._tag === "Chat")),
+                ],
+                ["Chat"],
+              ),
+            ],
+          ),
+        ],
+      ),
+    ],
+  );
+};
 
 export const view = (model: Model): Document => {
   const h = html<Message>();
 
+  const routeContent = M.value(model.route).pipe(
+    M.tagsExhaustive({
+      Posts: () => postsView(model),
+      Chat: () =>
+        h.submodel({
+          slotId: "chat",
+          model: model.chatPage,
+          view: Chat.view,
+          toParentMessage: (message) => GotChatMessage({ message }),
+        }),
+      NotFound: ({ path }) => notFoundView(path),
+    }),
+  );
+
   return {
-    title: "Posts",
-    body: h.main(
+    title: routeTitle(model.route),
+    body: h.div(
       [h.Class("min-h-screen bg-neutral-950 text-neutral-100")],
       [
-        h.section(
-          [h.Class("mx-auto max-w-5xl px-4 py-10")],
-          [
-            h.header(
-              [h.Class("mb-8 flex items-end justify-between gap-4")],
-              [
-                h.div(
-                  [],
-                  [
-                    h.p(
-                      [
-                        h.Class(
-                          "mb-1 text-sm font-bold uppercase text-neutral-400",
-                        ),
-                      ],
-                      ["Alchemy + Foldkit + Neon"],
-                    ),
-                    h.h1(
-                      [h.Class("text-4xl font-bold leading-tight")],
-                      ["Posts"],
-                    ),
-                  ],
-                ),
-                Button.view<Message>({
-                  onClick: ClickedRefresh(),
-                  toView: (attributes) =>
-                    h.button(
-                      [
-                        ...attributes.button,
-                        h.Class(
-                          "border border-neutral-700 bg-neutral-800 px-4 py-2 font-medium text-neutral-100 hover:bg-neutral-700",
-                        ),
-                      ],
-                      ["Refresh"],
-                    ),
-                }),
-              ],
-            ),
-
-            M.value(model.blog).pipe(
-              M.tagsExhaustive({
-                BlogLoading: () =>
-                  h.div(
-                    [
-                      h.Class(
-                        "border border-neutral-800 bg-neutral-900 p-4 text-neutral-400",
-                      ),
-                    ],
-                    ["Loading posts..."],
-                  ),
-                BlogFailed: ({ error }) =>
-                  h.div(
-                    [
-                      h.Class(
-                        "border border-neutral-800 bg-neutral-900 p-4 text-neutral-300",
-                      ),
-                    ],
-                    [error],
-                  ),
-                BlogLoaded: ({ data }) => blogView(model, data),
-              }),
-            ),
-          ],
-        ),
+        navigationView(model.route),
+        h.keyed("main")(routeKey(model.route), [], [routeContent]),
       ],
     ),
   };
 };
+
+const postsView = (model: Model): Html => {
+  const h = html<Message>();
+
+  return h.section(
+    [h.Class("mx-auto max-w-5xl px-4 py-10")],
+    [
+      h.header(
+        [h.Class("mb-8 flex items-end justify-between gap-4")],
+        [
+          h.div(
+            [],
+            [
+              h.p(
+                [h.Class("mb-1 text-sm font-bold uppercase text-neutral-400")],
+                ["Alchemy + Foldkit + Neon"],
+              ),
+              h.h1([h.Class("text-4xl font-bold leading-tight")], ["Posts"]),
+            ],
+          ),
+          Button.view<Message>({
+            onClick: ClickedRefresh(),
+            toView: (attributes) =>
+              h.button(
+                [
+                  ...attributes.button,
+                  h.Class(
+                    "border border-neutral-700 bg-neutral-800 px-4 py-2 font-medium text-neutral-100 hover:bg-neutral-700",
+                  ),
+                ],
+                ["Refresh"],
+              ),
+          }),
+        ],
+      ),
+
+      M.value(model.blog).pipe(
+        M.tagsExhaustive({
+          BlogLoading: () =>
+            h.div(
+              [
+                h.Class(
+                  "border border-neutral-800 bg-neutral-900 p-4 text-neutral-400",
+                ),
+              ],
+              ["Loading posts..."],
+            ),
+          BlogFailed: ({ error }) =>
+            h.div(
+              [
+                h.Class(
+                  "border border-neutral-800 bg-neutral-900 p-4 text-neutral-300",
+                ),
+              ],
+              [error],
+            ),
+          BlogLoaded: ({ data }) => blogView(model, data),
+        }),
+      ),
+    ],
+  );
+};
+
+const notFoundView = (path: string): Html => {
+  const h = html<Message>();
+
+  return h.section(
+    [h.Class("mx-auto max-w-5xl px-4 py-10")],
+    [
+      h.div(
+        [h.Class("border border-neutral-800 bg-neutral-900 p-4")],
+        [
+          h.h1([h.Class("text-2xl font-bold")], ["Page not found"]),
+          h.p([h.Class("mt-2 text-neutral-400")], [`No route for ${path}.`]),
+          h.a(
+            [
+              h.Href(postsRouter()),
+              h.Class(
+                "mt-4 inline-block border border-neutral-700 bg-neutral-800 px-4 py-2 font-medium text-neutral-100 hover:bg-neutral-700",
+              ),
+            ],
+            ["Back to posts"],
+          ),
+        ],
+      ),
+    ],
+  );
+};
+
+const routeTitle = (route: AppRoute): string =>
+  M.value(route).pipe(
+    M.tag("Posts", () => "Posts"),
+    M.tag("Chat", ({ roomId }) => `Chat: ${roomId}`),
+    M.tag("NotFound", () => "Not Found"),
+    M.exhaustive,
+  );
+
+const routeKey = (route: AppRoute): string =>
+  M.value(route).pipe(
+    M.tag("Posts", () => "Posts"),
+    M.tag("Chat", ({ roomId }) => `Chat:${roomId}`),
+    M.tag("NotFound", ({ path }) => `NotFound:${path}`),
+    M.exhaustive,
+  );
 
 const blogView = (model: Model, data: BlogData): Html => {
   const h = html<Message>();

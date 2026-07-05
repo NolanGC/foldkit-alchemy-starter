@@ -1,5 +1,7 @@
 import { Story } from "foldkit";
+import { type Url } from "foldkit/url";
 import { describe, expect, test } from "vitest";
+import { Option } from "effect";
 
 import {
   BlogLoaded,
@@ -10,6 +12,7 @@ import {
   FailedDeletePost,
   FailedCreatePost,
   FetchBlogData,
+  GotChatMessage,
   SubmittedPostForm,
   SucceededCreatePost,
   SucceededDeletePost,
@@ -21,6 +24,8 @@ import {
   update,
   type Model,
 } from "./main";
+import { Chat } from "./page";
+import { ChatRoute, PostsRoute } from "./route";
 
 const ada = {
   id: 1,
@@ -59,7 +64,18 @@ const blogData = {
   posts: [firstPost],
 };
 
+const url = (pathname: string): Url => ({
+  protocol: "http:",
+  host: "localhost",
+  port: Option.none(),
+  pathname,
+  search: Option.none(),
+  hash: Option.none(),
+});
+
 const loadingModel: Model = {
+  route: PostsRoute(),
+  chatPage: Chat.init("general"),
   blog: { _tag: "BlogLoading" },
   selectedUserId: "",
   title: "",
@@ -77,11 +93,22 @@ const loadedModel: Model = {
 
 describe("update", () => {
   test("init starts loading blog data", () => {
-    const [model, commands] = init();
+    const [model, commands] = init(url("/"));
 
+    expect(model.route._tag).toBe("Posts");
+    expect(model.chatPage.roomId).toBe("general");
     expect(model.blog._tag).toBe("BlogLoading");
     expect(commands).toHaveLength(1);
     expect(commands[0]!.name).toBe(FetchBlogData.name);
+  });
+
+  test("init from a chat route captures the room id", () => {
+    const [model, commands] = init(url("/chat/general"));
+
+    expect(model.route).toEqual(ChatRoute({ roomId: "general" }));
+    expect(model.chatPage.roomId).toBe("general");
+    expect(model.chatPage.connection._tag).toBe("ConnectionConnecting");
+    expect(commands).toHaveLength(1);
   });
 
   test("refresh loads data and selects the first user", () => {
@@ -224,6 +251,73 @@ describe("update", () => {
         if (model.blog._tag === "BlogLoaded") {
           expect(model.blog.data.posts).toEqual([firstPost]);
         }
+      }),
+    );
+  });
+
+  test("chat messages are delegated into the chat page", () => {
+    Story.story(
+      update,
+      Story.with({
+        ...loadedModel,
+        route: ChatRoute({ roomId: "general" }),
+      }),
+      Story.message(
+        GotChatMessage({
+          message: Chat.ReceivedMessage({ text: "[user] hello" }),
+        }),
+      ),
+      Story.model((model) => {
+        expect(model.chatPage.messages).toEqual([{ text: "[user] hello" }]);
+      }),
+    );
+  });
+});
+
+describe("chat update", () => {
+  const connectedChat = {
+    ...Chat.init("general"),
+    connection: Chat.ConnectionConnected(),
+  };
+
+  test("submitting a connected chat message sends and clears the input", () => {
+    const sendMessageCommand = Chat.SendMessage({
+      roomId: connectedChat.roomId,
+      senderId: connectedChat.clientId,
+      text: "hello",
+    });
+
+    Story.story(
+      Chat.update,
+      Story.with({ ...connectedChat, messageInput: "  hello  " }),
+      Story.message(Chat.SubmittedMessage()),
+      Story.Command.expectExact(sendMessageCommand),
+      Story.Command.resolve(
+        sendMessageCommand,
+        Chat.SucceededSendMessage({ text: "hello" }),
+      ),
+      Story.model((model) => {
+        expect(model.messageInput).toBe("");
+      }),
+    );
+  });
+
+  test("empty chat submissions are ignored", () => {
+    Story.story(
+      Chat.update,
+      Story.with({ ...connectedChat, messageInput: "   " }),
+      Story.message(Chat.SubmittedMessage()),
+      Story.Command.expectNone(),
+    );
+  });
+
+  test("received chat messages are appended", () => {
+    Story.story(
+      Chat.update,
+      Story.with(connectedChat),
+      Story.message(Chat.ReceivedMessage({ text: "[abc] hello" })),
+      Story.model((model) => {
+        expect(model.messages).toEqual([{ text: "[abc] hello" }]);
       }),
     );
   });

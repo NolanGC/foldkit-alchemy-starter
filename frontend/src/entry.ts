@@ -2,7 +2,17 @@ import { Runtime } from "foldkit";
 
 import { overlay } from "@foldkit/devtools";
 
-import { Model, Message, init, update, view } from "./main";
+import {
+  ChangedUrl,
+  ClickedLink,
+  Model,
+  Message,
+  init,
+  managedResources,
+  subscriptions,
+  update,
+  view,
+} from "./main";
 import "./styles.css";
 
 const application = Runtime.makeApplication({
@@ -10,7 +20,13 @@ const application = Runtime.makeApplication({
   init,
   update,
   view,
+  subscriptions,
+  managedResources,
   container: document.getElementById("root"),
+  routing: {
+    onUrlRequest: (request) => ClickedLink({ request }),
+    onUrlChange: (url) => ChangedUrl({ url }),
+  },
   devTools: {
     overlay,
     Message,
