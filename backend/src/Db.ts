@@ -21,7 +21,6 @@ export const NeonDb = Effect.gen(function* () {
   const branch = yield* Neon.Branch("app-branch", {
     project,
     migrationsDir: schema.out,
-    importFiles: ["./seed/blog.sql"],
   });
 
   return { project, branch, schema };

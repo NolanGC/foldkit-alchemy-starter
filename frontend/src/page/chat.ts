@@ -1,3 +1,9 @@
+import {
+  ChatHistoryCursor,
+  ChatMessage,
+  ClientFrame,
+  ServerFrame,
+} from "@foldkit/backend";
 import { Button, Input } from "@foldkit/ui";
 import {
   Array,
@@ -16,6 +22,7 @@ import { html, type Html } from "foldkit/html";
 import { m } from "foldkit/message";
 import { ts } from "foldkit/schema";
 import { evo } from "foldkit/struct";
+import { generateSlug } from "random-word-slugs";
 
 const CONNECTION_TIMEOUT_MS = 5000;
 
@@ -24,17 +31,10 @@ if (CHAT_SERVICE_URL === undefined) {
   throw new Error("VITE_CHAT_SERVICE_URL is not set.");
 }
 
-const getZonedTime = DateTime.now.pipe(
-  Effect.map((utc) => DateTime.setZone(utc, DateTime.zoneMakeLocal())),
-);
+const decodeServerFrame = S.decodeUnknownOption(S.fromJsonString(ServerFrame));
+const encodeClientFrame = S.encodeSync(S.fromJsonString(ClientFrame));
 
 // MODEL
-
-export const ChatMessage = S.Struct({
-  text: S.String,
-  zoned: S.DateTimeZoned,
-});
-export type ChatMessage = typeof ChatMessage.Type;
 
 export const ConnectionDisconnected = ts("ConnectionDisconnected");
 export const ConnectionConnecting = ts("ConnectionConnecting");
@@ -53,7 +53,9 @@ export const Model = S.Struct({
   roomId: S.NonEmptyString,
   connection: ConnectionState,
   messages: S.Array(ChatMessage),
+  hasMoreHistory: S.Boolean,
   messageInput: S.String,
+  maybeZone: S.Option(S.TimeZone),
 });
 export type Model = typeof Model.Type;
 
@@ -63,30 +65,41 @@ export type ChatSocketService = ManagedResource.ServiceOf<typeof ChatSocket>;
 // MESSAGE
 
 export const Connected = m("Connected");
+export const CompletedRequestHistory = m("CompletedRequestHistory");
 export const Disconnected = m("Disconnected");
 export const FailedConnect = m("FailedConnect", { error: S.String });
+export const GotLocalZone = m("GotLocalZone", { zone: S.TimeZone });
 export const UpdatedMessageInput = m("UpdatedMessageInput", {
   value: S.String,
 });
 export const SubmittedMessage = m("SubmittedMessage");
+export const RequestedOlderHistory = m("RequestedOlderHistory");
 export const SucceededSendMessage = m("SucceededSendMessage", {
   text: S.String,
 });
-export const ReceivedMessage = m("ReceivedMessage", { text: S.String });
-export const TimestampedMessage = m("TimestampedMessage", {
-  text: S.String,
-  zoned: S.DateTimeZoned,
+export const ReceivedHistory = m("ReceivedHistory", {
+  messages: S.Array(ChatMessage),
+  hasMore: S.Boolean,
 });
+export const ReceivedOlderHistory = m("ReceivedOlderHistory", {
+  messages: S.Array(ChatMessage),
+  hasMore: S.Boolean,
+});
+export const ReceivedMessage = m("ReceivedMessage", { message: ChatMessage });
 
 export const Message = S.Union([
   Connected,
+  CompletedRequestHistory,
   Disconnected,
   FailedConnect,
+  GotLocalZone,
   UpdatedMessageInput,
   SubmittedMessage,
+  RequestedOlderHistory,
   SucceededSendMessage,
+  ReceivedHistory,
+  ReceivedOlderHistory,
   ReceivedMessage,
-  TimestampedMessage,
 ]);
 export type Message = typeof Message.Type;
 
@@ -96,18 +109,21 @@ export const init = (roomId: string): Model => ({
   roomId,
   connection: ConnectionConnecting(),
   messages: [],
+  hasMoreHistory: false,
   messageInput: "",
+  maybeZone: Option.none(),
 });
 
 export const connect = (model: Model, roomId: string): Model =>
   model.roomId === roomId && model.connection._tag === "ConnectionConnected"
     ? model
-    : {
-        roomId,
-        connection: ConnectionConnecting(),
-        messages: model.roomId === roomId ? model.messages : [],
-        messageInput: "",
-      };
+    : evo(model, {
+        roomId: () => roomId,
+        connection: () => ConnectionConnecting(),
+        messages: (messages) => (model.roomId === roomId ? messages : []),
+        hasMoreHistory: () => false,
+        messageInput: () => "",
+      });
 
 // COMMAND
 
@@ -120,7 +136,7 @@ export const SendMessage = Command.define(
   ChatSocket.get.pipe(
     Effect.flatMap((socket) =>
       Effect.sync(() => {
-        socket.send(text);
+        socket.send(encodeClientFrame({ _tag: "Post", body: text }));
         return SucceededSendMessage({ text });
       }),
     ),
@@ -130,13 +146,47 @@ export const SendMessage = Command.define(
   ),
 );
 
-export const TimestampMessage = Command.define(
-  "TimestampMessage",
-  { text: S.String },
-  TimestampedMessage,
-)(({ text }) =>
-  getZonedTime.pipe(Effect.map((zoned) => TimestampedMessage({ text, zoned }))),
+export const RequestHistory = Command.define(
+  "RequestHistory",
+  CompletedRequestHistory,
+  FailedConnect,
+)(
+  ChatSocket.get.pipe(
+    Effect.flatMap((socket) =>
+      Effect.sync(() => {
+        socket.send(encodeClientFrame({ _tag: "GetHistory" }));
+        return CompletedRequestHistory();
+      }),
+    ),
+    Effect.catchTag("ResourceNotAvailable", () =>
+      Effect.succeed(FailedConnect({ error: "Socket unavailable" })),
+    ),
+  ),
 );
+
+export const RequestOlderHistory = Command.define(
+  "RequestOlderHistory",
+  { cursor: ChatHistoryCursor },
+  CompletedRequestHistory,
+  FailedConnect,
+)(({ cursor }) =>
+  ChatSocket.get.pipe(
+    Effect.flatMap((socket) =>
+      Effect.sync(() => {
+        socket.send(encodeClientFrame({ _tag: "GetOlderHistory", cursor }));
+        return CompletedRequestHistory();
+      }),
+    ),
+    Effect.catchTag("ResourceNotAvailable", () =>
+      Effect.succeed(FailedConnect({ error: "Socket unavailable" })),
+    ),
+  ),
+);
+
+export const GetLocalZone = Command.define(
+  "GetLocalZone",
+  GotLocalZone,
+)(Effect.sync(() => GotLocalZone({ zone: DateTime.zoneMakeLocal() })));
 
 // UPDATE
 
@@ -152,8 +202,13 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     M.tagsExhaustive({
       Connected: () => [
         evo(model, { connection: () => ConnectionConnected() }),
-        [],
+        [
+          RequestHistory(),
+          ...(Option.isNone(model.maybeZone) ? [GetLocalZone()] : []),
+        ],
       ],
+
+      CompletedRequestHistory: () => [model, []],
 
       Disconnected: () => [
         evo(model, { connection: () => ConnectionDisconnected() }),
@@ -162,6 +217,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
       FailedConnect: ({ error }) => [
         evo(model, { connection: () => ConnectionError({ error }) }),
+        [],
+      ],
+
+      GotLocalZone: ({ zone }) => [
+        evo(model, { maybeZone: () => Option.some(zone) }),
         [],
       ],
 
@@ -186,17 +246,47 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         ];
       },
 
+      RequestedOlderHistory: () => {
+        const oldestMessage = model.messages[0];
+        if (!model.hasMoreHistory || !oldestMessage) {
+          return [model, []];
+        }
+
+        return [
+          model,
+          [
+            RequestOlderHistory({
+              cursor: {
+                beforeCreatedAtEpochMillis: DateTime.toEpochMillis(
+                  oldestMessage.createdAt,
+                ),
+                beforeId: oldestMessage.id,
+              },
+            }),
+          ],
+        ];
+      },
+
       SucceededSendMessage: () => [model, []],
 
-      ReceivedMessage: ({ text }) => [model, [TimestampMessage({ text })]],
-
-      TimestampedMessage: ({ text, zoned }) => [
+      ReceivedHistory: ({ messages, hasMore }) => [
         evo(model, {
-          messages: (messages) => [
-            ...messages,
-            ChatMessage.make({ text, zoned }),
-          ],
+          messages: () => messages,
+          hasMoreHistory: () => hasMore,
         }),
+        [],
+      ],
+
+      ReceivedOlderHistory: ({ messages, hasMore }) => [
+        evo(model, {
+          messages: (existing) => [...messages, ...existing],
+          hasMoreHistory: () => hasMore,
+        }),
+        [],
+      ],
+
+      ReceivedMessage: ({ message }) => [
+        evo(model, { messages: (messages) => [...messages, message] }),
         [],
       ],
     }),
@@ -261,6 +351,8 @@ export const managedResources = ManagedResource.make<Model, Message>()(
 
 const streamChatSocketMessages = (socket: WebSocket) =>
   Stream.callback<
+    | typeof ReceivedHistory.Type
+    | typeof ReceivedOlderHistory.Type
     | typeof ReceivedMessage.Type
     | typeof Disconnected.Type
     | typeof FailedConnect.Type
@@ -271,7 +363,35 @@ const streamChatSocketMessages = (socket: WebSocket) =>
           if (typeof event.data !== "string") {
             return;
           }
-          Queue.offerUnsafe(queue, ReceivedMessage({ text: event.data }));
+          Option.match(decodeServerFrame(event.data), {
+            onNone: () => {},
+            onSome: (frame) =>
+              M.value(frame).pipe(
+                M.tagsExhaustive({
+                  History: ({ messages, hasMore }) => {
+                    Queue.offerUnsafe(
+                      queue,
+                      ReceivedHistory({
+                        messages,
+                        hasMore,
+                      }),
+                    );
+                  },
+                  OlderHistory: ({ messages, hasMore }) => {
+                    Queue.offerUnsafe(
+                      queue,
+                      ReceivedOlderHistory({
+                        messages,
+                        hasMore,
+                      }),
+                    );
+                  },
+                  Posted: ({ message }) => {
+                    Queue.offerUnsafe(queue, ReceivedMessage({ message }));
+                  },
+                }),
+              ),
+          });
         };
         const handleClose = () => {
           Queue.offerUnsafe(queue, Disconnected());
@@ -353,7 +473,7 @@ export const view = Submodel.defineView<Model, Message>((model): Html => {
               ),
             ],
           ),
-          messagesView(model.messages),
+          messagesView(model.messages, model.hasMoreHistory, model.maybeZone),
           messageInputView(model),
         ],
       ),
@@ -381,7 +501,28 @@ const connectionStatusView = (connection: ConnectionState): Html => {
   );
 };
 
-const messagesView = (messages: ReadonlyArray<ChatMessage>): Html => {
+const senderLabel = (senderId: string): string =>
+  `${generateSlug(2, {
+    format: "kebab",
+  })}-${senderId.slice(0, 3)}`;
+
+const messageTime = (
+  createdAt: DateTime.Utc,
+  maybeZone: Option.Option<DateTime.TimeZone>,
+): string =>
+  DateTime.format(
+    Option.match(maybeZone, {
+      onNone: () => createdAt,
+      onSome: (zone) => DateTime.setZone(createdAt, zone),
+    }),
+    { hour: "2-digit", minute: "2-digit", second: "2-digit" },
+  );
+
+const messagesView = (
+  messages: ReadonlyArray<ChatMessage>,
+  hasMoreHistory: boolean,
+  maybeZone: Option.Option<DateTime.TimeZone>,
+): Html => {
   const h = html<Message>();
 
   return h.div(
@@ -398,26 +539,45 @@ const messagesView = (messages: ReadonlyArray<ChatMessage>): Html => {
         ),
       ],
       onNonEmpty: (messages) => [
+        ...(hasMoreHistory
+          ? [
+              h.div(
+                [h.Class("mb-3 flex justify-center")],
+                [
+                  h.button(
+                    [
+                      h.Type("button"),
+                      h.OnClick(RequestedOlderHistory()),
+                      h.Class(
+                        "border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800",
+                      ),
+                    ],
+                    ["Load more"],
+                  ),
+                ],
+              ),
+            ]
+          : []),
         h.ul(
           [h.Class("flex flex-col gap-3")],
           Array.map(messages, (message) =>
-            h.li(
+            h.keyed("li")(
+              message.id,
               [
                 h.Class(
                   "self-start border border-neutral-800 bg-neutral-900 px-4 py-3",
                 ),
               ],
               [
-                h.p([h.Class("break-words text-neutral-300")], [message.text]),
                 h.p(
-                  [h.Class("mt-1 text-xs text-neutral-500")],
+                  [h.Class("text-xs text-neutral-500")],
                   [
-                    DateTime.format(message.zoned, {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    }),
+                    `${senderLabel(message.senderId)} · ${messageTime(message.createdAt, maybeZone)}`,
                   ],
+                ),
+                h.p(
+                  [h.Class("mt-1 break-words text-neutral-300")],
+                  [message.body],
                 ),
               ],
             ),

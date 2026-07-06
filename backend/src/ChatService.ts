@@ -15,6 +15,7 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
   "ChatService",
   {
     main: import.meta.url,
+    dev: { port: 1338, strictPort: true },
   },
   Effect.gen(function* () {
     const rooms = yield* Room;

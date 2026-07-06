@@ -20,12 +20,6 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "default": "./src/index.ts"
-    },
-    "./Client": {
-      "bun": "./src/Client.ts",
-      "types": "./src/Client.ts",
-      "import": "./src/Client.ts",
-      "default": "./src/Client.ts"
     }
   },
   "scripts": {

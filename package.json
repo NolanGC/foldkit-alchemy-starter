@@ -24,6 +24,7 @@
     "drizzle-orm": "1.0.0-rc.1",
     "effect": "4.0.0-beta.88",
     "pg": "^8.13.0",
+    "random-word-slugs": "^0.1.7",
     "typescript": "^5"
   },
   "devDependencies": {
