@@ -1,7 +1,7 @@
 # WIP - Foldkit+Alchemy Starter
 
-A small full-stack starter that combines Foldkit and Alchemy for building
-apps end-to-end with Effect.
+A small full-stack starter (live chat app with channels) that combines Foldkit and Alchemy for building
+apps end-to-end with Effect. 
 
 Infra stack currently centers around Cloudflare with Neon connected via Hyperdrive for
 Postgres.
@@ -12,7 +12,6 @@ designed to dramatically improve the effectiveness of building apps with agents.
 TODOs:
 
 - Auth integration with BetterAuth
-- Migration to a slightly more complex multi-page example to include more Foldkit features
 - Opentelemetry integration with Axiom and instrumentation inside Effect services
 - Documentation for agents
 - Payments scaffolding
