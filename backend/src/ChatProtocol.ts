@@ -33,10 +33,16 @@ export const PostedFrame = S.TaggedStruct("Posted", {
 });
 export type PostedFrame = typeof PostedFrame.Type;
 
+export const RejectedFrame = S.TaggedStruct("Rejected", {
+  reason: S.String,
+});
+export type RejectedFrame = typeof RejectedFrame.Type;
+
 export const ServerFrame = S.Union([
   HistoryFrame,
   OlderHistoryFrame,
   PostedFrame,
+  RejectedFrame,
 ]);
 export type ServerFrame = typeof ServerFrame.Type;
 

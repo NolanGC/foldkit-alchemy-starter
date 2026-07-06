@@ -218,6 +218,23 @@ describe("chat update", () => {
     );
   });
 
+  test("a rejected message surfaces an error and clears on the next edit", () => {
+    Story.story(
+      Chat.update,
+      Story.with(connectedChat),
+      Story.message(
+        Chat.ReceivedRejected({ roomId: "general", reason: "Too long." }),
+      ),
+      Story.model((model) => {
+        expect(model.sendError).toEqual(Option.some("Too long."));
+      }),
+      Story.message(Chat.UpdatedMessageInput({ value: "hi" })),
+      Story.model((model) => {
+        expect(model.sendError).toEqual(Option.none());
+      }),
+    );
+  });
+
   test("posted messages are appended", () => {
     Story.story(
       Chat.update,
@@ -275,6 +292,44 @@ describe("chat update", () => {
         expect(model.roomId).toBe("random");
         expect(model.connection._tag).toBe("ConnectionConnecting");
         expect(model.history).toEqual(Chat.HistoryLoading());
+      }),
+    );
+  });
+
+  test("an unexpected disconnect schedules a reconnect and bumps the attempt on retry", () => {
+    Story.story(
+      Chat.update,
+      Story.with(connectedChat),
+      Story.message(Chat.Disconnected({ roomId: "general" })),
+      Story.Command.expectExact(
+        Chat.ScheduleReconnect({ roomId: "general", delayMs: 500 }),
+      ),
+      Story.model((model) => {
+        expect(model.connection._tag).toBe("ConnectionDisconnected");
+        expect(model.reconnectAttempt).toBe(0);
+      }),
+      Story.Command.resolve(
+        Chat.ScheduleReconnect,
+        Chat.ScheduledReconnect({ roomId: "general" }),
+      ),
+      Story.model((model) => {
+        expect(model.connection._tag).toBe("ConnectionConnecting");
+        expect(model.reconnectAttempt).toBe(1);
+      }),
+    );
+  });
+
+  test("a successful reconnect resets the attempt counter", () => {
+    Story.story(
+      Chat.update,
+      Story.with({ ...connectedChat, reconnectAttempt: 3 }),
+      Story.message(Chat.Connected({ roomId: "general" })),
+      Story.Command.resolve(
+        Chat.RequestHistory,
+        Chat.CompletedRequestHistory(),
+      ),
+      Story.model((model) => {
+        expect(model.reconnectAttempt).toBe(0);
       }),
     );
   });

@@ -161,7 +161,19 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
           }
 
           const body = frame.body.trim();
-          if (String_.isEmpty(body) || body.length > MAX_CHAT_MESSAGE_BODY_LENGTH) {
+          if (String_.isEmpty(body)) {
+            return;
+          }
+          if (body.length > MAX_CHAT_MESSAGE_BODY_LENGTH) {
+            // The shipped client enforces this client-side, so this only
+            // fires for a non-standard client; still worth an explicit
+            // signal rather than a silent drop.
+            yield* socket.send(
+              encodeServerFrame({
+                _tag: "Rejected",
+                reason: `Message exceeds ${MAX_CHAT_MESSAGE_BODY_LENGTH} characters.`,
+              }),
+            );
             return;
           }
 

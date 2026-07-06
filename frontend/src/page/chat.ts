@@ -2,6 +2,7 @@ import {
   ChatHistoryCursor,
   ChatMessage,
   ClientFrame,
+  MAX_CHAT_MESSAGE_BODY_LENGTH,
   ServerFrame,
 } from "@foldkit/backend";
 import { Button, Input } from "@foldkit/ui";
@@ -34,6 +35,11 @@ import { CHAT_SERVICE_URL } from "../config";
 
 const CONNECTION_TIMEOUT_MS = 5000;
 const SENDER_LABEL_LENGTH = 5;
+const RECONNECT_BASE_DELAY_MS = 500;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+
+const reconnectDelayMs = (attempt: number): number =>
+  Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** attempt);
 
 const CHAT_MESSAGES_SCROLL_ID = "chat-messages-scroll";
 
@@ -78,7 +84,12 @@ export const Model = S.Struct({
   connection: ConnectionState,
   history: HistoryState,
   messageInput: S.String,
+  sendError: S.Option(S.String),
   maybeZone: S.Option(S.TimeZone),
+  // Bumped on each reconnect attempt. Included in the chat socket's
+  // requirements so bumping it forces `ManagedResource` to re-acquire even
+  // though `roomId` hasn't changed — see the `ScheduledReconnect` handler.
+  reconnectAttempt: S.Int,
 });
 export type Model = typeof Model.Type;
 
@@ -124,6 +135,13 @@ export const ReceivedMessage = m("ReceivedMessage", {
   roomId: S.NonEmptyString,
   message: ChatMessage,
 });
+export const ReceivedRejected = m("ReceivedRejected", {
+  roomId: S.NonEmptyString,
+  reason: S.String,
+});
+export const ScheduledReconnect = m("ScheduledReconnect", {
+  roomId: S.NonEmptyString,
+});
 
 export const Message = S.Union([
   Connected,
@@ -140,6 +158,8 @@ export const Message = S.Union([
   ReceivedHistory,
   ReceivedOlderHistory,
   ReceivedMessage,
+  ReceivedRejected,
+  ScheduledReconnect,
 ]);
 export type Message = typeof Message.Type;
 
@@ -150,7 +170,9 @@ export const init = (roomId: string): Model => ({
   connection: ConnectionConnecting(),
   history: HistoryLoading(),
   messageInput: "",
+  sendError: Option.none(),
   maybeZone: Option.none(),
+  reconnectAttempt: 0,
 });
 
 export const connect = (model: Model, roomId: string): Model =>
@@ -162,6 +184,8 @@ export const connect = (model: Model, roomId: string): Model =>
         history: (history) =>
           model.roomId === roomId ? history : HistoryLoading(),
         messageInput: () => "",
+        sendError: () => Option.none(),
+        reconnectAttempt: () => 0,
       });
 
 // COMMAND
@@ -220,6 +244,16 @@ export const RequestOlderHistory = Command.define(
   ),
 );
 
+export const ScheduleReconnect = Command.define(
+  "ScheduleReconnect",
+  { roomId: S.NonEmptyString, delayMs: S.Number },
+  ScheduledReconnect,
+)(({ roomId, delayMs }) =>
+  Effect.sleep(Duration.millis(delayMs)).pipe(
+    Effect.as(ScheduledReconnect({ roomId })),
+  ),
+);
+
 export const GetLocalZone = Command.define(
   "GetLocalZone",
   GotLocalZone,
@@ -263,7 +297,10 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     M.tags({
       Connected: ({ roomId }) =>
         inCurrentRoom(roomId, () => [
-          evo(model, { connection: () => ConnectionConnected() }),
+          evo(model, {
+            connection: () => ConnectionConnected(),
+            reconnectAttempt: () => 0,
+          }),
           Option.match(model.maybeZone, {
             onNone: () => [RequestHistory({ roomId }), GetLocalZone()],
             onSome: () => [RequestHistory({ roomId })],
@@ -273,13 +310,23 @@ export const update = (model: Model, message: Message): UpdateReturn => {
       Disconnected: ({ roomId }) =>
         inCurrentRoom(roomId, () => [
           evo(model, { connection: () => ConnectionDisconnected() }),
-          [],
+          [
+            ScheduleReconnect({
+              roomId,
+              delayMs: reconnectDelayMs(model.reconnectAttempt),
+            }),
+          ],
         ]),
 
       FailedConnect: ({ roomId, error }) =>
         inCurrentRoom(roomId, () => [
           evo(model, { connection: () => ConnectionError({ error }) }),
-          [],
+          [
+            ScheduleReconnect({
+              roomId,
+              delayMs: reconnectDelayMs(model.reconnectAttempt),
+            }),
+          ],
         ]),
 
       GotLocalZone: ({ zone }) => [
@@ -288,7 +335,7 @@ export const update = (model: Model, message: Message): UpdateReturn => {
       ],
 
       UpdatedMessageInput: ({ value }) => [
-        evo(model, { messageInput: () => value }),
+        evo(model, { messageInput: () => value, sendError: () => Option.none() }),
         [],
       ],
 
@@ -365,6 +412,24 @@ export const update = (model: Model, message: Message): UpdateReturn => {
           }),
           [ScrollChatToBottom()],
         ]),
+
+      ReceivedRejected: ({ roomId, reason }) =>
+        inCurrentRoom(roomId, () => [
+          evo(model, { sendError: () => Option.some(reason) }),
+          [],
+        ]),
+
+      // Bumping `reconnectAttempt` changes the chat socket's requirements
+      // value even though `roomId` is unchanged, which is what makes
+      // `ManagedResource` release the dead socket and acquire a new one.
+      ScheduledReconnect: ({ roomId }) =>
+        inCurrentRoom(roomId, () => [
+          evo(model, {
+            connection: () => ConnectionConnecting(),
+            reconnectAttempt: (attempt) => attempt + 1,
+          }),
+          [],
+        ]),
     }),
     M.tag(
       "CompletedRequestHistory",
@@ -381,79 +446,91 @@ export const update = (model: Model, message: Message): UpdateReturn => {
 
 export const managedResources = ManagedResource.make<Model, Message>()(
   (entry) => ({
-    chatSocket: entry(S.Option(S.Struct({ roomId: S.NonEmptyString })), {
-      resource: ChatSocket,
-      modelToMaybeRequirements: (model) =>
-        Option.some({ roomId: model.roomId }),
-      acquire: ({ roomId }) =>
-        Effect.callback<ChatSocketValue, ChatSocketAcquireError>((resume) => {
-          const url = new URL(CHAT_SERVICE_URL);
-          url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-          url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
-          const socket = new WebSocket(url);
+    chatSocket: entry(
+      S.Option(S.Struct({ roomId: S.NonEmptyString, attempt: S.Int })),
+      {
+        resource: ChatSocket,
+        modelToMaybeRequirements: (model) =>
+          Option.some({
+            roomId: model.roomId,
+            attempt: model.reconnectAttempt,
+          }),
+        acquire: ({ roomId }) =>
+          Effect.callback<ChatSocketValue, ChatSocketAcquireError>(
+            (resume) => {
+              const url = new URL(CHAT_SERVICE_URL);
+              url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+              url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
+              const socket = new WebSocket(url);
 
-          const handleOpen = () => {
-            socket.removeEventListener("error", handleError);
-            resume(Effect.succeed({ roomId, socket }));
-          };
+              const handleOpen = () => {
+                socket.removeEventListener("error", handleError);
+                resume(Effect.succeed({ roomId, socket }));
+              };
 
-          const handleError = () => {
-            socket.removeEventListener("open", handleOpen);
-            resume(
+              const handleError = () => {
+                socket.removeEventListener("open", handleOpen);
+                resume(
+                  Effect.fail(
+                    new ChatSocketAcquireError({
+                      roomId,
+                      message: "Failed to connect to chat",
+                    }),
+                  ),
+                );
+              };
+
+              socket.addEventListener("open", handleOpen);
+              socket.addEventListener("error", handleError);
+
+              return Effect.sync(() => {
+                socket.removeEventListener("open", handleOpen);
+                socket.removeEventListener("error", handleError);
+                socket.close();
+              });
+            },
+          ).pipe(
+            Effect.timeout(Duration.millis(CONNECTION_TIMEOUT_MS)),
+            Effect.catchTag("TimeoutError", () =>
               Effect.fail(
                 new ChatSocketAcquireError({
                   roomId,
-                  message: "Failed to connect to chat",
+                  message: "Connection timeout",
                 }),
               ),
-            );
-          };
-
-          socket.addEventListener("open", handleOpen);
-          socket.addEventListener("error", handleError);
-
-          return Effect.sync(() => {
-            socket.removeEventListener("open", handleOpen);
-            socket.removeEventListener("error", handleError);
-            socket.close();
-          });
-        }).pipe(
-          Effect.timeout(Duration.millis(CONNECTION_TIMEOUT_MS)),
-          Effect.catchTag("TimeoutError", () =>
-            Effect.fail(
-              new ChatSocketAcquireError({
-                roomId,
-                message: "Connection timeout",
-              }),
             ),
           ),
-        ),
-      release: ({ socket }) =>
-        Effect.sync(() => {
-          socket.close();
-        }),
-      onAcquired: ({ roomId }) => Connected({ roomId }),
-      onReleased: () => CompletedReleaseChatSocket(),
-      // The framework erases the acquire error type at this boundary, so a
-      // guard is needed even though acquire only fails with this error.
-      onAcquireError: (error) =>
-        error instanceof ChatSocketAcquireError
-          ? FailedConnect({ roomId: error.roomId, error: error.message })
-          : FailedConnect({ roomId: "unknown", error: String(error) }),
-    }),
+        release: ({ socket }) =>
+          Effect.sync(() => {
+            socket.close();
+          }),
+        onAcquired: ({ roomId }) => Connected({ roomId }),
+        onReleased: () => CompletedReleaseChatSocket(),
+        // The framework erases the acquire error type at this boundary, so a
+        // guard is needed even though acquire only fails with this error.
+        onAcquireError: (error) =>
+          error instanceof ChatSocketAcquireError
+            ? FailedConnect({ roomId: error.roomId, error: error.message })
+            : FailedConnect({ roomId: "unknown", error: String(error) }),
+      },
+    ),
   }),
 );
 
 // SUBSCRIPTION
 
+const ChatSocketStreamMessage = S.Union([
+  ReceivedHistory,
+  ReceivedOlderHistory,
+  ReceivedMessage,
+  ReceivedRejected,
+  Disconnected,
+  FailedConnect,
+]);
+type ChatSocketStreamMessage = typeof ChatSocketStreamMessage.Type;
+
 const streamChatSocketMessages = ({ roomId, socket }: ChatSocketValue) =>
-  Stream.callback<
-    | typeof ReceivedHistory.Type
-    | typeof ReceivedOlderHistory.Type
-    | typeof ReceivedMessage.Type
-    | typeof Disconnected.Type
-    | typeof FailedConnect.Type
-  >((queue) =>
+  Stream.callback<ChatSocketStreamMessage>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() => {
         const handleMessage = (event: MessageEvent) => {
@@ -489,6 +566,12 @@ const streamChatSocketMessages = ({ roomId, socket }: ChatSocketValue) =>
                     Queue.offerUnsafe(
                       queue,
                       ReceivedMessage({ roomId, message }),
+                    );
+                  },
+                  Rejected: ({ reason }) => {
+                    Queue.offerUnsafe(
+                      queue,
+                      ReceivedRejected({ roomId, reason }),
                     );
                   },
                 }),
@@ -726,48 +809,65 @@ const messageInputView = (model: Model): Html => {
 
   return h.form(
     [
-      h.Class("mx-auto flex w-full max-w-3xl gap-2"),
+      h.Class("mx-auto flex w-full max-w-3xl flex-col gap-2"),
       h.OnSubmit(SubmittedMessage()),
     ],
     [
-      Input.view<Message>({
-        id: "chat-message",
-        value: model.messageInput,
-        placeholder: `Message ${model.roomId}`,
-        isDisabled: !isConnected,
-        onInput: (value) => UpdatedMessageInput({ value }),
-        toView: (attributes) =>
-          h.div(
-            [h.Class("min-w-0 flex-1")],
-            [
-              h.label([...attributes.label, h.Class("sr-only")], ["Message"]),
-              h.input([
-                ...attributes.input,
-                h.Autocomplete("off"),
-                h.Spellcheck(false),
-                h.Autocorrect("off"),
-                h.Autocapitalize("off"),
-                h.Class(
-                  "w-full border border-neutral-700 bg-neutral-950 px-4 py-3 text-neutral-100 outline-none placeholder:text-neutral-500 focus-visible:border-neutral-400 focus-visible:ring-1 focus-visible:ring-neutral-400 disabled:opacity-50",
-                ),
-              ]),
-            ],
-          ),
+      Option.match(model.sendError, {
+        onNone: () => h.empty,
+        onSome: (reason) =>
+          h.p([h.Class("text-sm text-red-400"), h.Role("alert")], [reason]),
       }),
-      Button.view<Message>({
-        type: "submit",
-        isDisabled: !canSend,
-        toView: (attributes) =>
-          h.button(
-            [
-              ...attributes.button,
-              h.Class(
-                "border border-neutral-700 bg-neutral-800 px-4 py-3 font-medium text-neutral-100 hover:bg-neutral-700 disabled:opacity-50",
+      h.div(
+        [h.Class("flex w-full gap-2")],
+        [
+          Input.view<Message>({
+            id: "chat-message",
+            value: model.messageInput,
+            placeholder: `Message ${model.roomId}`,
+            isDisabled: !isConnected,
+            onInput: (value) => UpdatedMessageInput({ value }),
+            toView: (attributes) =>
+              h.div(
+                [h.Class("min-w-0 flex-1")],
+                [
+                  h.label(
+                    [...attributes.label, h.Class("sr-only")],
+                    ["Message"],
+                  ),
+                  h.input([
+                    ...attributes.input,
+                    h.Autocomplete("off"),
+                    h.Spellcheck(false),
+                    h.Autocorrect("off"),
+                    h.Autocapitalize("off"),
+                    h.Attribute(
+                      "maxlength",
+                      String(MAX_CHAT_MESSAGE_BODY_LENGTH),
+                    ),
+                    h.Class(
+                      "w-full border border-neutral-700 bg-neutral-950 px-4 py-3 text-neutral-100 outline-none placeholder:text-neutral-500 focus-visible:border-neutral-400 focus-visible:ring-1 focus-visible:ring-neutral-400 disabled:opacity-50",
+                    ),
+                  ]),
+                ],
               ),
-            ],
-            ["Send"],
-          ),
-      }),
+          }),
+          Button.view<Message>({
+            type: "submit",
+            isDisabled: !canSend,
+            toView: (attributes) =>
+              h.button(
+                [
+                  ...attributes.button,
+                  h.Class(
+                    "border border-neutral-700 bg-neutral-800 px-4 py-3 font-medium text-neutral-100 hover:bg-neutral-700 disabled:opacity-50",
+                  ),
+                ],
+                ["Send"],
+              ),
+          }),
+        ],
+      ),
     ],
   );
 };
