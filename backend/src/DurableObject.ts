@@ -1,20 +1,21 @@
 import * as Cloudflare from "alchemy/Cloudflare";
+import * as Array from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as S from "effect/Schema";
+import * as String_ from "effect/String";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 import {
+  ChatMessage,
   type ChatHistoryCursor,
   ClientFrame,
   MAX_CHAT_MESSAGE_BODY_LENGTH,
   ServerFrame,
-  type ChatMessage,
 } from "./ChatProtocol.ts";
-import ChatPersistenceService, {
-  type PersistedChatMessage,
-} from "./ChatPersistenceService.ts";
+import ChatPersistenceService from "./ChatPersistenceService.ts";
 
 // Relevant: https://v2.alchemy.run/cloudflare/compute/hibernatable-websockets/#_top
 
@@ -24,34 +25,33 @@ const BROADCAST_CONCURRENCY = 32;
 const decodeClientFrame = S.decodeUnknownOption(S.fromJsonString(ClientFrame));
 const encodeServerFrame = S.encodeSync(S.fromJsonString(ServerFrame));
 
+// The persistence wire format is `ChatMessage`'s encoded form, so the schema
+// codec is the whole mapping layer between the socket and the database.
+const decodeChatMessage = S.decodeSync(ChatMessage);
+const encodeChatMessage = S.encodeSync(ChatMessage);
+
 type Attachment = { id: string; roomId: string };
+
+type HistoryCache = {
+  readonly messages: ReadonlyArray<ChatMessage>;
+  readonly hasMore: boolean;
+};
 
 const textFromSocketMessage = (message: string | ArrayBuffer): string =>
   typeof message === "string" ? message : new TextDecoder().decode(message);
 
-const toChatMessage = (message: PersistedChatMessage): ChatMessage => ({
-  id: message.id,
-  senderId: message.senderId,
-  body: message.body,
-  createdAt: DateTime.makeUnsafe(message.createdAtEpochMillis),
-});
-
-const toPersistedChatMessage = (
-  roomId: string,
-  message: ChatMessage,
-): PersistedChatMessage => ({
-  id: message.id,
-  roomId,
-  senderId: message.senderId,
-  body: message.body,
-  createdAtEpochMillis: DateTime.toEpochMillis(message.createdAt),
-});
-
-const roomIdFromRequestUrl = (url: string): string =>
-  decodeURIComponent(
-    new URL(url, "http://chat").pathname.split("/").filter(Boolean).at(-1) ??
-      "general",
-  );
+// Fails loudly rather than falling back to a default room: silently
+// mis-rooming messages on a routing bug would be much worse than a 500.
+const roomIdFromRequestUrl = (url: string): string => {
+  const segment = new URL(url, "http://chat").pathname
+    .split("/")
+    .filter(Boolean)
+    .at(-1);
+  if (segment === undefined) {
+    throw new Error(`No room id in request URL: ${url}`);
+  }
+  return decodeURIComponent(segment);
+};
 
 export default class Room extends Cloudflare.DurableObject<Room>()(
   "Room",
@@ -65,8 +65,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
       const sessions = new Map<string, Cloudflare.WebSocket>();
       // Rebuilt from Postgres on the first join after each activation; kept
       // current in memory afterwards so joins don't hit the database.
-      let cachedHistory: ReadonlyArray<ChatMessage> | undefined;
-      let cachedHistoryHasMore = false;
+      const historyCache = yield* Ref.make(Option.none<HistoryCache>());
 
       for (const socket of yield* state.getWebSockets()) {
         const data = socket.deserializeAttachment<Attachment>();
@@ -75,39 +74,44 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
 
       const loadHistory = (roomId: string, cursor?: ChatHistoryCursor) =>
         Effect.gen(function* () {
-          if (!cursor && cachedHistory) {
-            return { messages: cachedHistory, hasMore: cachedHistoryHasMore };
+          const cached = yield* Ref.get(historyCache);
+          if (cursor === undefined && Option.isSome(cached)) {
+            return cached.value;
           }
           const page = yield* persistence.getRoomHistory(
             roomId,
             HISTORY_LIMIT,
             cursor,
           );
-          const messages = page.messages.map(toChatMessage);
-          if (!cursor) {
-            cachedHistory = messages;
-            cachedHistoryHasMore = page.hasMore;
-          } else if (cachedHistory) {
-            cachedHistory = [...messages, ...cachedHistory];
-            cachedHistoryHasMore = page.hasMore;
-          }
+          const messages = Array.map(page.messages, (message) =>
+            decodeChatMessage(message),
+          );
+          yield* Ref.update(historyCache, (current) =>
+            cursor === undefined
+              ? Option.some({ messages, hasMore: page.hasMore })
+              : Option.map(current, (existing) => ({
+                  messages: [...messages, ...existing.messages],
+                  hasMore: page.hasMore,
+                })),
+          );
           return { messages, hasMore: page.hasMore };
         });
 
-      const appendToHistory = (message: ChatMessage) => {
-        if (cachedHistory) {
-          cachedHistory = [...cachedHistory, message].slice(-HISTORY_LIMIT);
-        }
-      };
+      const appendToHistory = (message: ChatMessage) =>
+        Ref.update(
+          historyCache,
+          Option.map((cache) => ({
+            messages: [...cache.messages, message].slice(-HISTORY_LIMIT),
+            hasMore: cache.hasMore,
+          })),
+        );
 
       const persistMessage = (roomId: string, message: ChatMessage) =>
-        persistence
-          .persistMessage(toPersistedChatMessage(roomId, message))
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.logError("Failed to persist chat message", cause),
-            ),
-          );
+        persistence.persistMessage(roomId, encodeChatMessage(message)).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("Failed to persist chat message", cause),
+          ),
+        );
 
       const broadcast = (text: string) =>
         Effect.forEach(sessions.values(), (peer) => peer.send(text), {
@@ -157,7 +161,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
           }
 
           const body = frame.body.trim();
-          if (body.length === 0 || body.length > MAX_CHAT_MESSAGE_BODY_LENGTH) {
+          if (String_.isEmpty(body) || body.length > MAX_CHAT_MESSAGE_BODY_LENGTH) {
             return;
           }
 
@@ -179,7 +183,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
             { concurrency: 2 },
           );
 
-          appendToHistory(chatMessage);
+          yield* appendToHistory(chatMessage);
         }),
         webSocketClose: Effect.fn(function* (
           ws: Cloudflare.WebSocket,

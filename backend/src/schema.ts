@@ -1,5 +1,10 @@
 import { index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
+export const Rooms = pgTable("rooms", {
+  id: text("id").primaryKey(),
+});
+export type RoomRow = typeof Rooms.$inferSelect;
+
 export const ChatMessages = pgTable(
   "chat_messages",
   {

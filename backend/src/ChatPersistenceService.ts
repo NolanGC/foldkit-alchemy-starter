@@ -1,46 +1,46 @@
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle";
 import { and, desc, eq, lt, or } from "drizzle-orm";
+import * as Array from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as S from "effect/Schema";
+import { pipe } from "effect/Function";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
-import { ChatHistoryCursor } from "./ChatProtocol.ts";
+import type { ChatHistoryCursor, ChatMessage } from "./ChatProtocol.ts";
 import { Hyperdrive } from "./Db.ts";
-import { ChatMessages, type ChatMessageRow } from "./schema.ts";
+import { ChatMessages, Rooms, type ChatMessageRow } from "./schema.ts";
 
-export const PersistedChatMessage = S.Struct({
-  id: S.String,
-  roomId: S.String,
-  senderId: S.String,
-  body: S.String,
-  createdAtEpochMillis: S.Number,
-});
-export type PersistedChatMessage = typeof PersistedChatMessage.Type;
+// The wire type is the `ChatMessage` schema's encoded form: `createdAt` is
+// epoch millis there (`S.DateTimeUtcFromMillis`), which survives the
+// structured-clone RPC boundary where a `DateTime.Utc` instance would not.
+export type PersistedChatMessage = typeof ChatMessage.Encoded;
 
-export const PersistedChatHistoryPage = S.Struct({
-  messages: S.Array(PersistedChatMessage),
-  hasMore: S.Boolean,
-});
-export type PersistedChatHistoryPage = typeof PersistedChatHistoryPage.Type;
+export type PersistedChatHistoryPage = {
+  readonly messages: ReadonlyArray<PersistedChatMessage>;
+  readonly hasMore: boolean;
+};
 
 type ChatPersistenceServiceApi = {
-  persistMessage: (message: PersistedChatMessage) => Effect.Effect<void>;
+  persistMessage: (
+    roomId: string,
+    message: PersistedChatMessage,
+  ) => Effect.Effect<void>;
+  // NOTE: `cursor` is a plain optional parameter rather than an `Option`
+  // because arguments cross the worker RPC boundary via structured clone,
+  // which `Option` class instances don't survive.
   getRoomHistory: (
     roomId: string,
     limit: number,
     cursor?: ChatHistoryCursor,
   ) => Effect.Effect<PersistedChatHistoryPage>;
+  listRooms: () => Effect.Effect<ReadonlyArray<string>>;
 };
 
-const toPersistedChatMessage = (
-  row: ChatMessageRow,
-): PersistedChatMessage => ({
+const toPersistedChatMessage = (row: ChatMessageRow): PersistedChatMessage => ({
   id: row.id,
-  roomId: row.roomId,
   senderId: row.senderId,
   body: row.body,
-  createdAtEpochMillis: row.createdAt.getTime(),
+  createdAt: row.createdAt.getTime(),
 });
 
 export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersistenceServiceApi>()(
@@ -57,14 +57,14 @@ export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersis
     return {
       fetch: Effect.succeed(HttpServerResponse.text("ok")),
 
-      persistMessage: (message: PersistedChatMessage) =>
+      persistMessage: (roomId: string, message: PersistedChatMessage) =>
         Effect.gen(function* () {
           yield* db.insert(ChatMessages).values({
             id: message.id,
-            roomId: message.roomId,
+            roomId,
             senderId: message.senderId,
             body: message.body,
-            createdAt: new Date(message.createdAtEpochMillis),
+            createdAt: new Date(message.createdAt),
           });
         }),
 
@@ -100,9 +100,20 @@ export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersis
             .orderBy(desc(ChatMessages.createdAt), desc(ChatMessages.id))
             .limit(limit + 1);
           return {
-            messages: rows.slice(0, limit).map(toPersistedChatMessage).reverse(),
+            messages: pipe(
+              rows,
+              Array.take(limit),
+              Array.map(toPersistedChatMessage),
+              Array.reverse,
+            ),
             hasMore: rows.length > limit,
           };
+        }),
+
+      listRooms: () =>
+        Effect.gen(function* () {
+          const rows = yield* db.select({ id: Rooms.id }).from(Rooms);
+          return Array.map(rows, (row) => row.id);
         }),
     };
   }).pipe(Effect.provide(Cloudflare.Hyperdrive.ConnectBinding)),

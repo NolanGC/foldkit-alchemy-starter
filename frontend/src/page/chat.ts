@@ -7,6 +7,7 @@ import {
 import { Button, Input } from "@foldkit/ui";
 import {
   Array,
+  Data,
   DateTime,
   Duration,
   Effect,
@@ -29,23 +30,19 @@ import { m } from "foldkit/message";
 import { ts } from "foldkit/schema";
 import { evo } from "foldkit/struct";
 
-const CONNECTION_TIMEOUT_MS = 5000;
+import { CHAT_SERVICE_URL } from "../config";
 
-const CHAT_SERVICE_URL = import.meta.env.VITE_CHAT_SERVICE_URL;
-if (CHAT_SERVICE_URL === undefined) {
-  throw new Error("VITE_CHAT_SERVICE_URL is not set.");
-}
+const CONNECTION_TIMEOUT_MS = 5000;
+const SENDER_LABEL_LENGTH = 5;
 
 const CHAT_MESSAGES_SCROLL_ID = "chat-messages-scroll";
 
-class ChatSocketAcquireError extends Error {
-  constructor(
-    readonly roomId: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+class ChatSocketAcquireError extends Data.TaggedError(
+  "ChatSocketAcquireError",
+)<{
+  roomId: string;
+  message: string;
+}> {}
 
 const decodeServerFrame = S.decodeUnknownOption(S.fromJsonString(ServerFrame));
 const encodeClientFrame = S.encodeSync(S.fromJsonString(ClientFrame));
@@ -65,11 +62,21 @@ const ConnectionState = S.Union([
 ]);
 type ConnectionState = typeof ConnectionState.Type;
 
+// "History not loaded yet" and "loaded, zero messages" are distinct states:
+// conflating them made the empty state flash while switching rooms.
+export const HistoryLoading = ts("HistoryLoading");
+export const HistoryLoaded = ts("HistoryLoaded", {
+  messages: S.Array(ChatMessage),
+  hasMore: S.Boolean,
+});
+
+const HistoryState = S.Union([HistoryLoading, HistoryLoaded]);
+type HistoryState = typeof HistoryState.Type;
+
 export const Model = S.Struct({
   roomId: S.NonEmptyString,
   connection: ConnectionState,
-  messages: S.Array(ChatMessage),
-  hasMoreHistory: S.Boolean,
+  history: HistoryState,
   messageInput: S.String,
   maybeZone: S.Option(S.TimeZone),
 });
@@ -141,8 +148,7 @@ export type Message = typeof Message.Type;
 export const init = (roomId: string): Model => ({
   roomId,
   connection: ConnectionConnecting(),
-  messages: [],
-  hasMoreHistory: false,
+  history: HistoryLoading(),
   messageInput: "",
   maybeZone: Option.none(),
 });
@@ -153,19 +159,18 @@ export const connect = (model: Model, roomId: string): Model =>
     : evo(model, {
         roomId: () => roomId,
         connection: () => ConnectionConnecting(),
-        messages: (messages) => (model.roomId === roomId ? messages : []),
-        hasMoreHistory: () => false,
+        history: (history) =>
+          model.roomId === roomId ? history : HistoryLoading(),
         messageInput: () => "",
       });
 
 // COMMAND
 
-export const SendMessage = Command.define(
-  "SendMessage",
-  { roomId: S.NonEmptyString, text: S.String },
-  SucceededSendMessage,
-  FailedConnect,
-)(({ roomId, text }) =>
+const sendClientFrame = <A extends Message>(
+  roomId: string,
+  frame: ClientFrame,
+  onSent: () => A,
+) =>
   ChatSocket.get.pipe(
     Effect.flatMap((chatSocket) =>
       Effect.sync(() => {
@@ -173,13 +178,23 @@ export const SendMessage = Command.define(
           return FailedConnect({ roomId, error: "Socket unavailable" });
         }
 
-        chatSocket.socket.send(encodeClientFrame({ _tag: "Post", body: text }));
-        return SucceededSendMessage({ text });
+        chatSocket.socket.send(encodeClientFrame(frame));
+        return onSent();
       }),
     ),
     Effect.catchTag("ResourceNotAvailable", () =>
       Effect.succeed(FailedConnect({ roomId, error: "Socket unavailable" })),
     ),
+  );
+
+export const SendMessage = Command.define(
+  "SendMessage",
+  { roomId: S.NonEmptyString, text: S.String },
+  SucceededSendMessage,
+  FailedConnect,
+)(({ roomId, text }) =>
+  sendClientFrame(roomId, { _tag: "Post", body: text }, () =>
+    SucceededSendMessage({ text }),
   ),
 );
 
@@ -189,21 +204,7 @@ export const RequestHistory = Command.define(
   CompletedRequestHistory,
   FailedConnect,
 )(({ roomId }) =>
-  ChatSocket.get.pipe(
-    Effect.flatMap((chatSocket) =>
-      Effect.sync(() => {
-        if (chatSocket.roomId !== roomId) {
-          return FailedConnect({ roomId, error: "Socket unavailable" });
-        }
-
-        chatSocket.socket.send(encodeClientFrame({ _tag: "GetHistory" }));
-        return CompletedRequestHistory();
-      }),
-    ),
-    Effect.catchTag("ResourceNotAvailable", () =>
-      Effect.succeed(FailedConnect({ roomId, error: "Socket unavailable" })),
-    ),
-  ),
+  sendClientFrame(roomId, { _tag: "GetHistory" }, CompletedRequestHistory),
 );
 
 export const RequestOlderHistory = Command.define(
@@ -212,22 +213,10 @@ export const RequestOlderHistory = Command.define(
   CompletedRequestHistory,
   FailedConnect,
 )(({ roomId, cursor }) =>
-  ChatSocket.get.pipe(
-    Effect.flatMap((chatSocket) =>
-      Effect.sync(() => {
-        if (chatSocket.roomId !== roomId) {
-          return FailedConnect({ roomId, error: "Socket unavailable" });
-        }
-
-        chatSocket.socket.send(
-          encodeClientFrame({ _tag: "GetOlderHistory", cursor }),
-        );
-        return CompletedRequestHistory();
-      }),
-    ),
-    Effect.catchTag("ResourceNotAvailable", () =>
-      Effect.succeed(FailedConnect({ roomId, error: "Socket unavailable" })),
-    ),
+  sendClientFrame(
+    roomId,
+    { _tag: "GetOlderHistory", cursor },
+    CompletedRequestHistory,
   ),
 );
 
@@ -261,42 +250,37 @@ type UpdateReturn = readonly [
 ];
 const withUpdateReturn = M.withReturnType<UpdateReturn>();
 
-export const update = (model: Model, message: Message): UpdateReturn =>
-  M.value(message).pipe(
+const whenCurrentRoom =
+  (model: Model) =>
+  (roomId: string, run: () => UpdateReturn): UpdateReturn =>
+    roomId === model.roomId ? run() : [model, []];
+
+export const update = (model: Model, message: Message): UpdateReturn => {
+  const inCurrentRoom = whenCurrentRoom(model);
+
+  return M.value(message).pipe(
     withUpdateReturn,
-    M.tagsExhaustive({
+    M.tags({
       Connected: ({ roomId }) =>
-        roomId === model.roomId
-          ? [
-              evo(model, { connection: () => ConnectionConnected() }),
-              [
-                RequestHistory({ roomId }),
-                ...(Option.isNone(model.maybeZone) ? [GetLocalZone()] : []),
-              ],
-            ]
-          : [model, []],
-
-      CompletedRequestHistory: () => [model, []],
-
-      CompletedReleaseChatSocket: () => [model, []],
-
-      CompletedScrollChatToBottom: () => [model, []],
+        inCurrentRoom(roomId, () => [
+          evo(model, { connection: () => ConnectionConnected() }),
+          Option.match(model.maybeZone, {
+            onNone: () => [RequestHistory({ roomId }), GetLocalZone()],
+            onSome: () => [RequestHistory({ roomId })],
+          }),
+        ]),
 
       Disconnected: ({ roomId }) =>
-        roomId === model.roomId
-          ? [
-              evo(model, { connection: () => ConnectionDisconnected() }),
-              [],
-            ]
-          : [model, []],
+        inCurrentRoom(roomId, () => [
+          evo(model, { connection: () => ConnectionDisconnected() }),
+          [],
+        ]),
 
       FailedConnect: ({ roomId, error }) =>
-        roomId === model.roomId
-          ? [
-              evo(model, { connection: () => ConnectionError({ error }) }),
-              [],
-            ]
-          : [model, []],
+        inCurrentRoom(roomId, () => [
+          evo(model, { connection: () => ConnectionError({ error }) }),
+          [],
+        ]),
 
       GotLocalZone: ({ zone }) => [
         evo(model, { maybeZone: () => Option.some(zone) }),
@@ -325,60 +309,73 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       },
 
       RequestedOlderHistory: () => {
-        const oldestMessage = model.messages[0];
-        if (!model.hasMoreHistory || !oldestMessage) {
+        if (model.history._tag !== "HistoryLoaded" || !model.history.hasMore) {
           return [model, []];
         }
 
-        return [
-          model,
-          [
-            RequestOlderHistory({
-              roomId: model.roomId,
-              cursor: {
-                beforeCreatedAtEpochMillis: DateTime.toEpochMillis(
-                  oldestMessage.createdAt,
-                ),
-                beforeId: oldestMessage.id,
-              },
-            }),
+        return Option.match(Array.head(model.history.messages), {
+          onNone: (): UpdateReturn => [model, []],
+          onSome: (oldestMessage): UpdateReturn => [
+            model,
+            [
+              RequestOlderHistory({
+                roomId: model.roomId,
+                cursor: {
+                  beforeCreatedAtEpochMillis: DateTime.toEpochMillis(
+                    oldestMessage.createdAt,
+                  ),
+                  beforeId: oldestMessage.id,
+                },
+              }),
+            ],
           ],
-        ];
+        });
       },
 
-      SucceededSendMessage: () => [model, []],
-
       ReceivedHistory: ({ roomId, messages, hasMore }) =>
-        roomId === model.roomId
-          ? [
-              evo(model, {
-                messages: () => messages,
-                hasMoreHistory: () => hasMore,
-              }),
-              [ScrollChatToBottom()],
-            ]
-          : [model, []],
+        inCurrentRoom(roomId, () => [
+          evo(model, { history: () => HistoryLoaded({ messages, hasMore }) }),
+          [ScrollChatToBottom()],
+        ]),
 
       ReceivedOlderHistory: ({ roomId, messages, hasMore }) =>
-        roomId === model.roomId
-          ? [
-              evo(model, {
-                messages: (existing) => [...messages, ...existing],
-                hasMoreHistory: () => hasMore,
-              }),
-              [],
-            ]
-          : [model, []],
+        inCurrentRoom(roomId, () => [
+          evo(model, {
+            history: (history) =>
+              history._tag === "HistoryLoaded"
+                ? HistoryLoaded({
+                    messages: [...messages, ...history.messages],
+                    hasMore,
+                  })
+                : history,
+          }),
+          [],
+        ]),
 
       ReceivedMessage: ({ roomId, message }) =>
-        roomId === model.roomId
-          ? [
-              evo(model, { messages: (messages) => [...messages, message] }),
-              [ScrollChatToBottom()],
-            ]
-          : [model, []],
+        inCurrentRoom(roomId, () => [
+          evo(model, {
+            history: (history) =>
+              history._tag === "HistoryLoaded"
+                ? HistoryLoaded({
+                    messages: [...history.messages, message],
+                    hasMore: history.hasMore,
+                  })
+                : history,
+          }),
+          [ScrollChatToBottom()],
+        ]),
     }),
+    M.tag(
+      "CompletedRequestHistory",
+      "CompletedReleaseChatSocket",
+      "CompletedScrollChatToBottom",
+      "SucceededSendMessage",
+      (): UpdateReturn => [model, []],
+    ),
+    M.exhaustive,
   );
+};
 
 // MANAGED RESOURCE
 
@@ -389,7 +386,7 @@ export const managedResources = ManagedResource.make<Model, Message>()(
       modelToMaybeRequirements: (model) =>
         Option.some({ roomId: model.roomId }),
       acquire: ({ roomId }) =>
-        Effect.callback<ChatSocketValue, Error>((resume) => {
+        Effect.callback<ChatSocketValue, ChatSocketAcquireError>((resume) => {
           const url = new URL(CHAT_SERVICE_URL);
           url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
           url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
@@ -404,10 +401,10 @@ export const managedResources = ManagedResource.make<Model, Message>()(
             socket.removeEventListener("open", handleOpen);
             resume(
               Effect.fail(
-                new ChatSocketAcquireError(
+                new ChatSocketAcquireError({
                   roomId,
-                  "Failed to connect to chat",
-                ),
+                  message: "Failed to connect to chat",
+                }),
               ),
             );
           };
@@ -424,7 +421,10 @@ export const managedResources = ManagedResource.make<Model, Message>()(
           Effect.timeout(Duration.millis(CONNECTION_TIMEOUT_MS)),
           Effect.catchTag("TimeoutError", () =>
             Effect.fail(
-              new ChatSocketAcquireError(roomId, "Connection timeout"),
+              new ChatSocketAcquireError({
+                roomId,
+                message: "Connection timeout",
+              }),
             ),
           ),
         ),
@@ -434,12 +434,12 @@ export const managedResources = ManagedResource.make<Model, Message>()(
         }),
       onAcquired: ({ roomId }) => Connected({ roomId }),
       onReleased: () => CompletedReleaseChatSocket(),
+      // The framework erases the acquire error type at this boundary, so a
+      // guard is needed even though acquire only fails with this error.
       onAcquireError: (error) =>
-        FailedConnect({
-          roomId:
-            error instanceof ChatSocketAcquireError ? error.roomId : "unknown",
-          error: error instanceof Error ? error.message : String(error),
-        }),
+        error instanceof ChatSocketAcquireError
+          ? FailedConnect({ roomId: error.roomId, error: error.message })
+          : FailedConnect({ roomId: "unknown", error: String(error) }),
     }),
   }),
 );
@@ -534,17 +534,16 @@ export const subscriptions = Subscription.make<
         isConnected: model.connection._tag === "ConnectionConnected",
       }),
       dependenciesToStream: ({ isConnected }) =>
-        Stream.when(
-          Stream.unwrap(
-            ChatSocket.get.pipe(
-              Effect.map(streamChatSocketMessages),
-              Effect.catchTag("ResourceNotAvailable", () =>
-                Effect.succeed(Stream.empty),
+        isConnected
+          ? Stream.unwrap(
+              ChatSocket.get.pipe(
+                Effect.map(streamChatSocketMessages),
+                Effect.catchTag("ResourceNotAvailable", () =>
+                  Effect.succeed(Stream.empty),
+                ),
               ),
-            ),
-          ),
-          Effect.sync(() => isConnected),
-        ),
+            )
+          : Stream.empty,
     },
   ),
 }));
@@ -575,7 +574,7 @@ export const view = Submodel.defineView<Model, Message>((model): Html => {
               ),
             ],
           ),
-          messagesView(model.messages, model.hasMoreHistory, model.maybeZone),
+          historyView(model.history, model.maybeZone),
           messageInputView(model),
         ],
       ),
@@ -604,7 +603,7 @@ const connectionStatusView = (connection: ConnectionState): Html => {
 };
 
 const senderLabel = (senderId: string): string =>
-  `user-${senderId.slice(0, 5)}`;
+  `user-${senderId.slice(0, SENDER_LABEL_LENGTH)}`;
 
 const messageTime = (
   createdAt: DateTime.Utc,
@@ -618,9 +617,8 @@ const messageTime = (
     { hour: "2-digit", minute: "2-digit", second: "2-digit" },
   );
 
-const messagesView = (
-  messages: ReadonlyArray<ChatMessage>,
-  hasMoreHistory: boolean,
+const historyView = (
+  history: HistoryState,
   maybeZone: Option.Option<DateTime.TimeZone>,
 ): Html => {
   const h = html<Message>();
@@ -636,65 +634,86 @@ const messagesView = (
       h.div(
         [h.Class("mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end")],
         [
-          ...Array.match(messages, {
-            onEmpty: () => [
-              h.div(
+          M.value(history).pipe(
+            M.tagsExhaustive({
+              HistoryLoading: () => h.empty,
+              HistoryLoaded: ({ messages, hasMore }) =>
+                messagesView(messages, hasMore, maybeZone),
+            }),
+          ),
+        ],
+      ),
+    ],
+  );
+};
+
+const messagesView = (
+  messages: ReadonlyArray<ChatMessage>,
+  hasMore: boolean,
+  maybeZone: Option.Option<DateTime.TimeZone>,
+): Html => {
+  const h = html<Message>();
+
+  return Array.match(messages, {
+    onEmpty: () =>
+      h.div(
+        [
+          h.Class(
+            "border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-400",
+          ),
+        ],
+        ["No messages yet."],
+      ),
+    onNonEmpty: (messages) =>
+      h.div(
+        [],
+        [
+          hasMore ? loadMoreView() : h.empty,
+          h.ul(
+            [h.Class("flex flex-col gap-3")],
+            Array.map(messages, (message) =>
+              h.keyed("li")(
+                message.id,
                 [
                   h.Class(
-                    "border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-400",
+                    "self-start border border-neutral-800 bg-neutral-900 px-4 py-3",
                   ),
                 ],
-                ["No messages yet."],
-              ),
-            ],
-            onNonEmpty: (messages) => [
-              ...(hasMoreHistory
-                ? [
-                    h.div(
-                      [h.Class("mb-3 flex justify-center")],
-                      [
-                        h.button(
-                          [
-                            h.Type("button"),
-                            h.OnClick(RequestedOlderHistory()),
-                            h.Class(
-                              "border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800",
-                            ),
-                          ],
-                          ["Load more"],
-                        ),
-                      ],
-                    ),
-                  ]
-                : []),
-              h.ul(
-                [h.Class("flex flex-col gap-3")],
-                Array.map(messages, (message) =>
-                  h.keyed("li")(
-                    message.id,
+                [
+                  h.p(
+                    [h.Class("text-xs text-neutral-500")],
                     [
-                      h.Class(
-                        "self-start border border-neutral-800 bg-neutral-900 px-4 py-3",
-                      ),
-                    ],
-                    [
-                      h.p(
-                        [h.Class("text-xs text-neutral-500")],
-                        [
-                          `${senderLabel(message.senderId)} · ${messageTime(message.createdAt, maybeZone)}`,
-                        ],
-                      ),
-                      h.p(
-                        [h.Class("mt-1 break-words text-neutral-300")],
-                        [message.body],
-                      ),
+                      `${senderLabel(message.senderId)} · ${messageTime(message.createdAt, maybeZone)}`,
                     ],
                   ),
-                ),
+                  h.p(
+                    [h.Class("mt-1 break-words text-neutral-300")],
+                    [message.body],
+                  ),
+                ],
               ),
-            ],
-          }),
+            ),
+          ),
         ],
+      ),
+  });
+};
+
+const loadMoreView = (): Html => {
+  const h = html<Message>();
+
+  return h.div(
+    [h.Class("mb-3 flex justify-center")],
+    [
+      h.button(
+        [
+          h.Type("button"),
+          h.OnClick(RequestedOlderHistory()),
+          h.Class(
+            "border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800",
+          ),
+        ],
+        ["Load more"],
       ),
     ],
   );
@@ -729,7 +748,7 @@ const messageInputView = (model: Model): Html => {
                 h.Autocorrect("off"),
                 h.Autocapitalize("off"),
                 h.Class(
-                  "w-full border border-neutral-700 bg-neutral-950 px-4 py-3 text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none focus:ring-0 disabled:opacity-50",
+                  "w-full border border-neutral-700 bg-neutral-950 px-4 py-3 text-neutral-100 outline-none placeholder:text-neutral-500 focus-visible:border-neutral-400 focus-visible:ring-1 focus-visible:ring-neutral-400 disabled:opacity-50",
                 ),
               ]),
             ],

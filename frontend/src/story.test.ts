@@ -3,7 +3,7 @@ import { Story } from "foldkit";
 import { type Url } from "foldkit/url";
 import { describe, expect, test } from "vitest";
 
-import { GotChatMessage, init, update } from "./main";
+import { GotChatMessage, GotRooms, init, update } from "./main";
 import { Chat } from "./page";
 import { ChatRoute } from "./route";
 
@@ -24,6 +24,11 @@ const followUpMessage = {
   createdAt,
 };
 
+const loadedHistory = (
+  messages: ReadonlyArray<typeof helloMessage>,
+): ReturnType<typeof Chat.HistoryLoaded> =>
+  Chat.HistoryLoaded({ messages, hasMore: false });
+
 const url = (pathname: string): Url => ({
   protocol: "http:",
   host: "localhost",
@@ -34,29 +39,46 @@ const url = (pathname: string): Url => ({
 });
 
 describe("update", () => {
-  test("init on the home route joins the general room", () => {
+  test("init on the home route joins the general room and fetches rooms", () => {
     const [model, commands] = init(url("/"));
 
     expect(model.route._tag).toBe("Home");
+    expect(model.rooms._tag).toBe("RoomsLoading");
     expect(model.chatPage.roomId).toBe("general");
     expect(model.chatPage.connection._tag).toBe("ConnectionConnecting");
-    expect(commands).toHaveLength(0);
+    expect(commands).toHaveLength(1);
   });
 
   test("init from a chat route captures the room id", () => {
-    const [model, commands] = init(url("/chat/random"));
+    const [model] = init(url("/chat/random"));
 
     expect(model.route).toEqual(ChatRoute({ roomId: "random" }));
     expect(model.chatPage.roomId).toBe("random");
-    expect(commands).toHaveLength(0);
+  });
+
+  test("the fetched room list is stored", () => {
+    const [model] = init(url("/"));
+    const [next] = update(
+      model,
+      GotRooms({ roomIds: ["general", "random", "feature-requests"] }),
+    );
+
+    expect(next.rooms._tag).toBe("RoomsLoaded");
+    expect(next.rooms).toMatchObject({
+      roomIds: ["general", "random", "feature-requests"],
+    });
   });
 
   test("chat messages are delegated into the chat page", () => {
     const [model] = init(url("/"));
+    const loadedModel = {
+      ...model,
+      chatPage: { ...model.chatPage, history: loadedHistory([]) },
+    };
 
     Story.story(
       update,
-      Story.with(model),
+      Story.with(loadedModel),
       Story.message(
         GotChatMessage({
           message: Chat.ReceivedMessage({
@@ -71,7 +93,7 @@ describe("update", () => {
         (message) => GotChatMessage({ message }),
       ),
       Story.model((model) => {
-        expect(model.chatPage.messages).toEqual([helloMessage]);
+        expect(model.chatPage.history).toEqual(loadedHistory([helloMessage]));
       }),
     );
   });
@@ -81,6 +103,7 @@ describe("chat update", () => {
   const connectedChat: Chat.Model = {
     ...Chat.init("general"),
     connection: Chat.ConnectionConnected(),
+    history: loadedHistory([]),
     maybeZone: Option.some(localZone),
   };
 
@@ -152,10 +175,10 @@ describe("chat update", () => {
     );
   });
 
-  test("history replaces the message list", () => {
+  test("history replaces the loading state", () => {
     Story.story(
       Chat.update,
-      Story.with({ ...connectedChat, messages: [helloMessage] }),
+      Story.with({ ...connectedChat, history: Chat.HistoryLoading() }),
       Story.message(
         Chat.ReceivedHistory({
           roomId: "general",
@@ -169,8 +192,9 @@ describe("chat update", () => {
         Chat.CompletedScrollChatToBottom(),
       ),
       Story.model((model) => {
-        expect(model.messages).toEqual([helloMessage, followUpMessage]);
-        expect(model.hasMoreHistory).toBe(false);
+        expect(model.history).toEqual(
+          loadedHistory([helloMessage, followUpMessage]),
+        );
       }),
     );
   });
@@ -178,7 +202,7 @@ describe("chat update", () => {
   test("older history is prepended", () => {
     Story.story(
       Chat.update,
-      Story.with({ ...connectedChat, messages: [followUpMessage] }),
+      Story.with({ ...connectedChat, history: loadedHistory([followUpMessage]) }),
       Story.message(
         Chat.ReceivedOlderHistory({
           roomId: "general",
@@ -187,7 +211,9 @@ describe("chat update", () => {
         }),
       ),
       Story.model((model) => {
-        expect(model.messages).toEqual([helloMessage, followUpMessage]);
+        expect(model.history).toEqual(
+          loadedHistory([helloMessage, followUpMessage]),
+        );
       }),
     );
   });
@@ -195,7 +221,7 @@ describe("chat update", () => {
   test("posted messages are appended", () => {
     Story.story(
       Chat.update,
-      Story.with({ ...connectedChat, messages: [helloMessage] }),
+      Story.with({ ...connectedChat, history: loadedHistory([helloMessage]) }),
       Story.message(
         Chat.ReceivedMessage({
           roomId: "general",
@@ -208,20 +234,22 @@ describe("chat update", () => {
         Chat.CompletedScrollChatToBottom(),
       ),
       Story.model((model) => {
-        expect(model.messages).toEqual([helloMessage, followUpMessage]);
+        expect(model.history).toEqual(
+          loadedHistory([helloMessage, followUpMessage]),
+        );
       }),
     );
   });
 
-  test("switching rooms clears messages and reconnects", () => {
+  test("switching rooms resets history to loading and reconnects", () => {
     const nextModel = Chat.connect(
-      { ...connectedChat, messages: [helloMessage] },
+      { ...connectedChat, history: loadedHistory([helloMessage]) },
       "random",
     );
 
     expect(nextModel.roomId).toBe("random");
     expect(nextModel.connection._tag).toBe("ConnectionConnecting");
-    expect(nextModel.messages).toEqual([]);
+    expect(nextModel.history).toEqual(Chat.HistoryLoading());
     expect(Option.isSome(nextModel.maybeZone)).toBe(true);
   });
 
@@ -232,6 +260,7 @@ describe("chat update", () => {
         ...connectedChat,
         roomId: "random",
         connection: Chat.ConnectionConnecting(),
+        history: Chat.HistoryLoading(),
       }),
       Story.message(Chat.Disconnected({ roomId: "general" })),
       Story.message(
@@ -245,7 +274,7 @@ describe("chat update", () => {
       Story.model((model) => {
         expect(model.roomId).toBe("random");
         expect(model.connection._tag).toBe("ConnectionConnecting");
-        expect(model.messages).toEqual([]);
+        expect(model.history).toEqual(Chat.HistoryLoading());
       }),
     );
   });

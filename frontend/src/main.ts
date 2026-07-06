@@ -1,21 +1,35 @@
-import { Array, Effect, Match as M, Option, Schema as S } from "effect";
+import { Array, Cause, Effect, Match as M, Option, Schema as S } from "effect";
 import { Command, ManagedResource, Runtime, Subscription } from "foldkit";
 import { html, type Document, type Html } from "foldkit/html";
 import { m } from "foldkit/message";
 import { UrlRequest, load, pushUrl } from "foldkit/navigation";
+import { ts } from "foldkit/schema";
 import { evo } from "foldkit/struct";
 import { Url, toString as urlToString } from "foldkit/url";
 
+import { CHAT_SERVICE_URL } from "./config";
 import { Chat } from "./page";
 import { AppRoute, chatRouter, homeRouter, urlToAppRoute } from "./route";
 
 const DEFAULT_ROOM_ID = "general";
-const ROOM_IDS = ["general", "random"];
 
 // MODEL
 
+// The set of valid rooms lives in Postgres, so the client fetches it at boot
+// and models it as remote data: nav tabs render from it, and chat routes for
+// rooms outside it show "Room not found" instead of connecting.
+export const RoomsLoading = ts("RoomsLoading");
+export const RoomsFailed = ts("RoomsFailed", { error: S.String });
+export const RoomsLoaded = ts("RoomsLoaded", {
+  roomIds: S.Array(S.NonEmptyString),
+});
+
+const RoomsState = S.Union([RoomsLoading, RoomsFailed, RoomsLoaded]);
+type RoomsState = typeof RoomsState.Type;
+
 export const Model = S.Struct({
   route: AppRoute,
+  rooms: RoomsState,
   chatPage: Chat.Model,
 });
 export type Model = typeof Model.Type;
@@ -28,6 +42,10 @@ export const ClickedLink = m("ClickedLink", {
   request: UrlRequest,
 });
 export const ChangedUrl = m("ChangedUrl", { url: Url });
+export const GotRooms = m("GotRooms", {
+  roomIds: S.Array(S.NonEmptyString),
+});
+export const FailedFetchRooms = m("FailedFetchRooms", { error: S.String });
 export const GotChatMessage = m("GotChatMessage", {
   message: Chat.Message,
 });
@@ -37,6 +55,8 @@ export const Message = S.Union([
   CompletedLoadExternal,
   ClickedLink,
   ChangedUrl,
+  GotRooms,
+  FailedFetchRooms,
   GotChatMessage,
 ]);
 export type Message = typeof Message.Type;
@@ -52,9 +72,10 @@ export const init: Runtime.RoutingApplicationInit<Model, Message> = (url) => {
   return [
     {
       route,
+      rooms: RoomsLoading(),
       chatPage: Chat.init(routeRoomId(route)),
     },
-    [],
+    [FetchRooms()],
   ];
 };
 
@@ -71,6 +92,32 @@ const LoadExternal = Command.define(
   { href: S.String },
   CompletedLoadExternal,
 )(({ href }) => load(href).pipe(Effect.as(CompletedLoadExternal())));
+
+const decodeRoomIds = S.decodeUnknownOption(S.Array(S.NonEmptyString));
+
+const FetchRooms = Command.define(
+  "FetchRooms",
+  GotRooms,
+  FailedFetchRooms,
+)(
+  Effect.tryPromise(async () => {
+    const response = await fetch(new URL("/api/rooms", CHAT_SERVICE_URL));
+    if (!response.ok) {
+      throw new Error(`Failed to load rooms (${response.status})`);
+    }
+    return (await response.json()) as unknown;
+  }).pipe(
+    Effect.map((payload) =>
+      Option.match(decodeRoomIds(payload), {
+        onNone: () => FailedFetchRooms({ error: "Unexpected rooms payload" }),
+        onSome: (roomIds) => GotRooms({ roomIds }),
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.succeed(FailedFetchRooms({ error: Cause.pretty(cause) })),
+    ),
+  ),
+);
 
 // UPDATE
 
@@ -114,6 +161,16 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         ];
       },
 
+      GotRooms: ({ roomIds }) => [
+        evo(model, { rooms: () => RoomsLoaded({ roomIds }) }),
+        [],
+      ],
+
+      FailedFetchRooms: ({ error }) => [
+        evo(model, { rooms: () => RoomsFailed({ error }) }),
+        [],
+      ],
+
       GotChatMessage: ({ message }) => {
         const [chatPage, commands] = Chat.update(model.chatPage, message);
 
@@ -129,12 +186,20 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
 // MANAGED RESOURCES
 
+// A room is only known to be invalid once the room list has loaded; until
+// then the socket connects optimistically (the server refuses unknown rooms
+// anyway) so valid rooms never wait on the rooms fetch.
+const isUnknownRoom = (model: Model): boolean =>
+  model.route._tag === "Chat" &&
+  model.rooms._tag === "RoomsLoaded" &&
+  !Array.contains(model.rooms.roomIds, model.route.roomId);
+
 export const managedResources = ManagedResource.lift(Chat.managedResources)<
   Model,
   Message
 >({
   toChildModel: (model) =>
-    model.route._tag === "Chat"
+    model.route._tag === "Chat" && !isUnknownRoom(model)
       ? Option.some(model.chatPage)
       : Option.none(),
   toParentMessage: (message) => GotChatMessage({ message }),
@@ -155,11 +220,13 @@ export const subscriptions = Subscription.lift(Chat.subscriptions)<
 const isActiveRoom = (route: AppRoute, roomId: string): boolean =>
   route._tag === "Chat" && route.roomId === roomId;
 
-const navigationView = (currentRoute: AppRoute): Html => {
+const navigationView = (currentRoute: AppRoute, rooms: RoomsState): Html => {
   const h = html<Message>();
 
   const linkClassName = (isActive: boolean) =>
     `px-3 py-2 text-sm font-medium ${isActive ? "bg-neutral-800 text-neutral-100" : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"}`;
+
+  const roomIds = rooms._tag === "RoomsLoaded" ? rooms.roomIds : [];
 
   return h.nav(
     [h.Class("border-b border-neutral-900")],
@@ -171,7 +238,7 @@ const navigationView = (currentRoute: AppRoute): Html => {
             [h.Class("mr-4 text-sm font-bold uppercase text-neutral-400")],
             [h.a([h.Href(homeRouter())], ["Foldkit Chat"])],
           ),
-          ...Array.map(ROOM_IDS, (roomId) =>
+          ...Array.map(roomIds, (roomId) =>
             h.li(
               [],
               [
@@ -198,17 +265,27 @@ export const view = (model: Model): Document => {
     return { title: "FoldkitChat", body: landingView() };
   }
 
-  const routeContent =
-    model.route._tag === "NotFound"
-      ? notFoundView(model.route.path)
-      : chatView(model);
+  const routeContent = M.value(model.route).pipe(
+    M.tagsExhaustive({
+      NotFound: ({ path }) =>
+        notFoundView("Page not found", `No route for ${path}.`),
+      Chat: ({ roomId }) =>
+        isUnknownRoom(model)
+          ? notFoundView("Room not found", `There is no #${roomId} room.`)
+          : chatView(model),
+    }),
+  );
 
   return {
     title: routeTitle(model),
     body: h.div(
-      [h.Class("flex h-screen flex-col overflow-hidden bg-neutral-950 text-neutral-100")],
       [
-        navigationView(model.route),
+        h.Class(
+          "flex h-screen flex-col overflow-hidden bg-neutral-950 text-neutral-100",
+        ),
+      ],
+      [
+        navigationView(model.route, model.rooms),
         h.keyed("main")(
           routeKey(model),
           [h.Class("min-h-0 flex-1 overflow-hidden")],
@@ -232,7 +309,7 @@ const landingView = (): Html => {
           h.p(
             [h.Class("mt-3 text-neutral-400")],
             [
-              "A small realtime chat starter with typed state, managed resources, and edge-native deployment. Built with Foldkit, Alchemy, and Cloudflare.",
+              "A simple live chat app built end-to-end using Effect, using Foldkit and Alchemy.",
             ],
           ),
           h.a(
@@ -259,7 +336,7 @@ const chatView = (model: Model): Html => {
   });
 };
 
-const notFoundView = (path: string): Html => {
+const notFoundView = (heading: string, detail: string): Html => {
   const h = html<Message>();
 
   return h.section(
@@ -268,8 +345,8 @@ const notFoundView = (path: string): Html => {
       h.div(
         [h.Class("border border-neutral-800 bg-neutral-900 p-4")],
         [
-          h.h1([h.Class("text-2xl font-bold")], ["Page not found"]),
-          h.p([h.Class("mt-2 text-neutral-400")], [`No route for ${path}.`]),
+          h.h1([h.Class("text-2xl font-bold")], [heading]),
+          h.p([h.Class("mt-2 text-neutral-400")], [detail]),
           h.a(
             [
               h.Href(homeRouter()),
@@ -277,7 +354,7 @@ const notFoundView = (path: string): Html => {
                 "mt-4 inline-block border border-neutral-700 bg-neutral-800 px-4 py-2 font-medium text-neutral-100 hover:bg-neutral-700",
               ),
             ],
-            ["Back to chat"],
+            ["Back home"],
           ),
         ],
       ),
@@ -291,6 +368,11 @@ const routeTitle = (model: Model): string =>
     : `Chat: ${model.chatPage.roomId}`;
 
 const routeKey = (model: Model): string =>
-  model.route._tag === "NotFound"
-    ? `NotFound:${model.route.path}`
-    : `Chat:${model.chatPage.roomId}`;
+  M.value(model.route).pipe(
+    M.tagsExhaustive({
+      NotFound: ({ path }) => `NotFound:${path}`,
+      Chat: ({ roomId }) =>
+        isUnknownRoom(model) ? `RoomNotFound:${roomId}` : `Chat:${roomId}`,
+      Home: () => `Chat:${model.chatPage.roomId}`,
+    }),
+  );

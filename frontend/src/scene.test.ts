@@ -2,7 +2,7 @@ import { DateTime } from "effect";
 import { Scene } from "foldkit";
 import { describe, test } from "vitest";
 
-import { update, view, type Model } from "./main";
+import { RoomsLoaded, update, view, type Model } from "./main";
 import { Chat } from "./page";
 import { ChatRoute, HomeRoute, NotFoundRoute } from "./route";
 
@@ -17,9 +17,11 @@ const helloMessage = {
 
 const connectedModel: Model = {
   route: ChatRoute({ roomId: "general" }),
+  rooms: RoomsLoaded({ roomIds: ["general", "random", "feature-requests"] }),
   chatPage: {
     ...Chat.init("general"),
     connection: Chat.ConnectionConnected(),
+    history: Chat.HistoryLoaded({ messages: [], hasMore: false }),
   },
 };
 
@@ -42,8 +44,23 @@ describe("view", () => {
       Scene.expect(Scene.text("Connected")).toExist(),
       Scene.expect(Scene.role("link", { name: "#general" })).toExist(),
       Scene.expect(Scene.role("link", { name: "#random" })).toExist(),
+      Scene.expect(Scene.role("link", { name: "#feature-requests" })).toExist(),
       Scene.expect(Scene.label("Message")).toExist(),
       Scene.expect(Scene.role("button", { name: "Send" })).toBeDisabled(),
+    );
+  });
+
+  test("loading history renders no empty state", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({
+        ...connectedModel,
+        chatPage: {
+          ...connectedModel.chatPage,
+          history: Chat.HistoryLoading(),
+        },
+      }),
+      Scene.expect(Scene.text("No messages yet.")).not.toExist(),
     );
   });
 
@@ -54,7 +71,10 @@ describe("view", () => {
         ...connectedModel,
         chatPage: {
           ...connectedModel.chatPage,
-          messages: [helloMessage],
+          history: Chat.HistoryLoaded({
+            messages: [helloMessage],
+            hasMore: false,
+          }),
         },
       }),
       Scene.expect(Scene.text("hello from ada")).toExist(),
@@ -74,6 +94,7 @@ describe("view", () => {
     Scene.scene(
       { update, view },
       Scene.with({
+        ...connectedModel,
         route: ChatRoute({ roomId: "random" }),
         chatPage: {
           ...Chat.init("random"),
@@ -81,6 +102,19 @@ describe("view", () => {
         },
       }),
       Scene.expect(Scene.role("heading", { name: "Room: random" })).toExist(),
+    );
+  });
+
+  test("an unknown room renders the room not found page", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({
+        ...connectedModel,
+        route: ChatRoute({ roomId: "secret-lair" }),
+        chatPage: Chat.init("secret-lair"),
+      }),
+      Scene.expect(Scene.role("heading", { name: "Room not found" })).toExist(),
+      Scene.expect(Scene.text("There is no #secret-lair room.")).toExist(),
     );
   });
 
@@ -108,7 +142,7 @@ describe("view", () => {
         route: NotFoundRoute({ path: "/missing" }),
       }),
       Scene.expect(Scene.role("heading", { name: "Page not found" })).toExist(),
-      Scene.expect(Scene.role("link", { name: "Back to chat" })).toExist(),
+      Scene.expect(Scene.role("link", { name: "Back home" })).toExist(),
     );
   });
 });
