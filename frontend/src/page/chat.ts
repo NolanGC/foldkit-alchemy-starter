@@ -38,6 +38,15 @@ if (CHAT_SERVICE_URL === undefined) {
 
 const CHAT_MESSAGES_SCROLL_ID = "chat-messages-scroll";
 
+class ChatSocketAcquireError extends Error {
+  constructor(
+    readonly roomId: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 const decodeServerFrame = S.decodeUnknownOption(S.fromJsonString(ServerFrame));
 const encodeClientFrame = S.encodeSync(S.fromJsonString(ClientFrame));
 
@@ -66,16 +75,25 @@ export const Model = S.Struct({
 });
 export type Model = typeof Model.Type;
 
-const ChatSocket = ManagedResource.tag<WebSocket>()("ChatSocket");
+type ChatSocketValue = Readonly<{
+  roomId: string;
+  socket: WebSocket;
+}>;
+
+const ChatSocket = ManagedResource.tag<ChatSocketValue>()("ChatSocket");
 export type ChatSocketService = ManagedResource.ServiceOf<typeof ChatSocket>;
 
 // MESSAGE
 
-export const Connected = m("Connected");
+export const Connected = m("Connected", { roomId: S.NonEmptyString });
 export const CompletedRequestHistory = m("CompletedRequestHistory");
+export const CompletedReleaseChatSocket = m("CompletedReleaseChatSocket");
 export const CompletedScrollChatToBottom = m("CompletedScrollChatToBottom");
-export const Disconnected = m("Disconnected");
-export const FailedConnect = m("FailedConnect", { error: S.String });
+export const Disconnected = m("Disconnected", { roomId: S.NonEmptyString });
+export const FailedConnect = m("FailedConnect", {
+  roomId: S.NonEmptyString,
+  error: S.String,
+});
 export const GotLocalZone = m("GotLocalZone", { zone: S.TimeZone });
 export const UpdatedMessageInput = m("UpdatedMessageInput", {
   value: S.String,
@@ -86,18 +104,24 @@ export const SucceededSendMessage = m("SucceededSendMessage", {
   text: S.String,
 });
 export const ReceivedHistory = m("ReceivedHistory", {
+  roomId: S.NonEmptyString,
   messages: S.Array(ChatMessage),
   hasMore: S.Boolean,
 });
 export const ReceivedOlderHistory = m("ReceivedOlderHistory", {
+  roomId: S.NonEmptyString,
   messages: S.Array(ChatMessage),
   hasMore: S.Boolean,
 });
-export const ReceivedMessage = m("ReceivedMessage", { message: ChatMessage });
+export const ReceivedMessage = m("ReceivedMessage", {
+  roomId: S.NonEmptyString,
+  message: ChatMessage,
+});
 
 export const Message = S.Union([
   Connected,
   CompletedRequestHistory,
+  CompletedReleaseChatSocket,
   CompletedScrollChatToBottom,
   Disconnected,
   FailedConnect,
@@ -138,56 +162,71 @@ export const connect = (model: Model, roomId: string): Model =>
 
 export const SendMessage = Command.define(
   "SendMessage",
-  { text: S.String },
+  { roomId: S.NonEmptyString, text: S.String },
   SucceededSendMessage,
   FailedConnect,
-)(({ text }) =>
+)(({ roomId, text }) =>
   ChatSocket.get.pipe(
-    Effect.flatMap((socket) =>
+    Effect.flatMap((chatSocket) =>
       Effect.sync(() => {
-        socket.send(encodeClientFrame({ _tag: "Post", body: text }));
+        if (chatSocket.roomId !== roomId) {
+          return FailedConnect({ roomId, error: "Socket unavailable" });
+        }
+
+        chatSocket.socket.send(encodeClientFrame({ _tag: "Post", body: text }));
         return SucceededSendMessage({ text });
       }),
     ),
     Effect.catchTag("ResourceNotAvailable", () =>
-      Effect.succeed(FailedConnect({ error: "Socket unavailable" })),
+      Effect.succeed(FailedConnect({ roomId, error: "Socket unavailable" })),
     ),
   ),
 );
 
 export const RequestHistory = Command.define(
   "RequestHistory",
+  { roomId: S.NonEmptyString },
   CompletedRequestHistory,
   FailedConnect,
-)(
+)(({ roomId }) =>
   ChatSocket.get.pipe(
-    Effect.flatMap((socket) =>
+    Effect.flatMap((chatSocket) =>
       Effect.sync(() => {
-        socket.send(encodeClientFrame({ _tag: "GetHistory" }));
+        if (chatSocket.roomId !== roomId) {
+          return FailedConnect({ roomId, error: "Socket unavailable" });
+        }
+
+        chatSocket.socket.send(encodeClientFrame({ _tag: "GetHistory" }));
         return CompletedRequestHistory();
       }),
     ),
     Effect.catchTag("ResourceNotAvailable", () =>
-      Effect.succeed(FailedConnect({ error: "Socket unavailable" })),
+      Effect.succeed(FailedConnect({ roomId, error: "Socket unavailable" })),
     ),
   ),
 );
 
 export const RequestOlderHistory = Command.define(
   "RequestOlderHistory",
-  { cursor: ChatHistoryCursor },
+  { roomId: S.NonEmptyString, cursor: ChatHistoryCursor },
   CompletedRequestHistory,
   FailedConnect,
-)(({ cursor }) =>
+)(({ roomId, cursor }) =>
   ChatSocket.get.pipe(
-    Effect.flatMap((socket) =>
+    Effect.flatMap((chatSocket) =>
       Effect.sync(() => {
-        socket.send(encodeClientFrame({ _tag: "GetOlderHistory", cursor }));
+        if (chatSocket.roomId !== roomId) {
+          return FailedConnect({ roomId, error: "Socket unavailable" });
+        }
+
+        chatSocket.socket.send(
+          encodeClientFrame({ _tag: "GetOlderHistory", cursor }),
+        );
         return CompletedRequestHistory();
       }),
     ),
     Effect.catchTag("ResourceNotAvailable", () =>
-      Effect.succeed(FailedConnect({ error: "Socket unavailable" })),
+      Effect.succeed(FailedConnect({ roomId, error: "Socket unavailable" })),
     ),
   ),
 );
@@ -226,27 +265,38 @@ export const update = (model: Model, message: Message): UpdateReturn =>
   M.value(message).pipe(
     withUpdateReturn,
     M.tagsExhaustive({
-      Connected: () => [
-        evo(model, { connection: () => ConnectionConnected() }),
-        [
-          RequestHistory(),
-          ...(Option.isNone(model.maybeZone) ? [GetLocalZone()] : []),
-        ],
-      ],
+      Connected: ({ roomId }) =>
+        roomId === model.roomId
+          ? [
+              evo(model, { connection: () => ConnectionConnected() }),
+              [
+                RequestHistory({ roomId }),
+                ...(Option.isNone(model.maybeZone) ? [GetLocalZone()] : []),
+              ],
+            ]
+          : [model, []],
 
       CompletedRequestHistory: () => [model, []],
 
+      CompletedReleaseChatSocket: () => [model, []],
+
       CompletedScrollChatToBottom: () => [model, []],
 
-      Disconnected: () => [
-        evo(model, { connection: () => ConnectionDisconnected() }),
-        [],
-      ],
+      Disconnected: ({ roomId }) =>
+        roomId === model.roomId
+          ? [
+              evo(model, { connection: () => ConnectionDisconnected() }),
+              [],
+            ]
+          : [model, []],
 
-      FailedConnect: ({ error }) => [
-        evo(model, { connection: () => ConnectionError({ error }) }),
-        [],
-      ],
+      FailedConnect: ({ roomId, error }) =>
+        roomId === model.roomId
+          ? [
+              evo(model, { connection: () => ConnectionError({ error }) }),
+              [],
+            ]
+          : [model, []],
 
       GotLocalZone: ({ zone }) => [
         evo(model, { maybeZone: () => Option.some(zone) }),
@@ -270,7 +320,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
         return [
           evo(model, { messageInput: () => "" }),
-          [SendMessage({ text })],
+          [SendMessage({ roomId: model.roomId, text })],
         ];
       },
 
@@ -284,6 +334,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           model,
           [
             RequestOlderHistory({
+              roomId: model.roomId,
               cursor: {
                 beforeCreatedAtEpochMillis: DateTime.toEpochMillis(
                   oldestMessage.createdAt,
@@ -297,26 +348,35 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
       SucceededSendMessage: () => [model, []],
 
-      ReceivedHistory: ({ messages, hasMore }) => [
-        evo(model, {
-          messages: () => messages,
-          hasMoreHistory: () => hasMore,
-        }),
-        [ScrollChatToBottom()],
-      ],
+      ReceivedHistory: ({ roomId, messages, hasMore }) =>
+        roomId === model.roomId
+          ? [
+              evo(model, {
+                messages: () => messages,
+                hasMoreHistory: () => hasMore,
+              }),
+              [ScrollChatToBottom()],
+            ]
+          : [model, []],
 
-      ReceivedOlderHistory: ({ messages, hasMore }) => [
-        evo(model, {
-          messages: (existing) => [...messages, ...existing],
-          hasMoreHistory: () => hasMore,
-        }),
-        [],
-      ],
+      ReceivedOlderHistory: ({ roomId, messages, hasMore }) =>
+        roomId === model.roomId
+          ? [
+              evo(model, {
+                messages: (existing) => [...messages, ...existing],
+                hasMoreHistory: () => hasMore,
+              }),
+              [],
+            ]
+          : [model, []],
 
-      ReceivedMessage: ({ message }) => [
-        evo(model, { messages: (messages) => [...messages, message] }),
-        [ScrollChatToBottom()],
-      ],
+      ReceivedMessage: ({ roomId, message }) =>
+        roomId === model.roomId
+          ? [
+              evo(model, { messages: (messages) => [...messages, message] }),
+              [ScrollChatToBottom()],
+            ]
+          : [model, []],
     }),
   );
 
@@ -327,12 +387,9 @@ export const managedResources = ManagedResource.make<Model, Message>()(
     chatSocket: entry(S.Option(S.Struct({ roomId: S.NonEmptyString })), {
       resource: ChatSocket,
       modelToMaybeRequirements: (model) =>
-        model.connection._tag === "ConnectionConnecting" ||
-        model.connection._tag === "ConnectionConnected"
-          ? Option.some({ roomId: model.roomId })
-          : Option.none(),
+        Option.some({ roomId: model.roomId }),
       acquire: ({ roomId }) =>
-        Effect.callback<WebSocket, Error>((resume) => {
+        Effect.callback<ChatSocketValue, Error>((resume) => {
           const url = new URL(CHAT_SERVICE_URL);
           url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
           url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
@@ -340,12 +397,19 @@ export const managedResources = ManagedResource.make<Model, Message>()(
 
           const handleOpen = () => {
             socket.removeEventListener("error", handleError);
-            resume(Effect.succeed(socket));
+            resume(Effect.succeed({ roomId, socket }));
           };
 
           const handleError = () => {
             socket.removeEventListener("open", handleOpen);
-            resume(Effect.fail(new Error("Failed to connect to chat")));
+            resume(
+              Effect.fail(
+                new ChatSocketAcquireError(
+                  roomId,
+                  "Failed to connect to chat",
+                ),
+              ),
+            );
           };
 
           socket.addEventListener("open", handleOpen);
@@ -354,21 +418,26 @@ export const managedResources = ManagedResource.make<Model, Message>()(
           return Effect.sync(() => {
             socket.removeEventListener("open", handleOpen);
             socket.removeEventListener("error", handleError);
+            socket.close();
           });
         }).pipe(
           Effect.timeout(Duration.millis(CONNECTION_TIMEOUT_MS)),
           Effect.catchTag("TimeoutError", () =>
-            Effect.fail(new Error("Connection timeout")),
+            Effect.fail(
+              new ChatSocketAcquireError(roomId, "Connection timeout"),
+            ),
           ),
         ),
-      release: (socket) =>
+      release: ({ socket }) =>
         Effect.sync(() => {
           socket.close();
         }),
-      onAcquired: () => Connected(),
-      onReleased: () => Disconnected(),
+      onAcquired: ({ roomId }) => Connected({ roomId }),
+      onReleased: () => CompletedReleaseChatSocket(),
       onAcquireError: (error) =>
         FailedConnect({
+          roomId:
+            error instanceof ChatSocketAcquireError ? error.roomId : "unknown",
           error: error instanceof Error ? error.message : String(error),
         }),
     }),
@@ -377,7 +446,7 @@ export const managedResources = ManagedResource.make<Model, Message>()(
 
 // SUBSCRIPTION
 
-const streamChatSocketMessages = (socket: WebSocket) =>
+const streamChatSocketMessages = ({ roomId, socket }: ChatSocketValue) =>
   Stream.callback<
     | typeof ReceivedHistory.Type
     | typeof ReceivedOlderHistory.Type
@@ -400,6 +469,7 @@ const streamChatSocketMessages = (socket: WebSocket) =>
                     Queue.offerUnsafe(
                       queue,
                       ReceivedHistory({
+                        roomId,
                         messages,
                         hasMore,
                       }),
@@ -409,26 +479,30 @@ const streamChatSocketMessages = (socket: WebSocket) =>
                     Queue.offerUnsafe(
                       queue,
                       ReceivedOlderHistory({
+                        roomId,
                         messages,
                         hasMore,
                       }),
                     );
                   },
                   Posted: ({ message }) => {
-                    Queue.offerUnsafe(queue, ReceivedMessage({ message }));
+                    Queue.offerUnsafe(
+                      queue,
+                      ReceivedMessage({ roomId, message }),
+                    );
                   },
                 }),
               ),
           });
         };
         const handleClose = () => {
-          Queue.offerUnsafe(queue, Disconnected());
+          Queue.offerUnsafe(queue, Disconnected({ roomId }));
           Queue.endUnsafe(queue);
         };
         const handleError = () => {
           Queue.offerUnsafe(
             queue,
-            FailedConnect({ error: "Connection error" }),
+            FailedConnect({ roomId, error: "Connection error" }),
           );
           Queue.endUnsafe(queue);
         };

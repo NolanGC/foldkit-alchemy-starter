@@ -59,7 +59,10 @@ describe("update", () => {
       Story.with(model),
       Story.message(
         GotChatMessage({
-          message: Chat.ReceivedMessage({ message: helloMessage }),
+          message: Chat.ReceivedMessage({
+            roomId: "general",
+            message: helloMessage,
+          }),
         }),
       ),
       Story.Command.resolve(
@@ -85,8 +88,8 @@ describe("chat update", () => {
     Story.story(
       Chat.update,
       Story.with(Chat.init("general")),
-      Story.message(Chat.Connected()),
-      Story.Command.expectHas(Chat.RequestHistory()),
+      Story.message(Chat.Connected({ roomId: "general" })),
+      Story.Command.expectHas(Chat.RequestHistory({ roomId: "general" })),
       Story.Command.expectHas(Chat.GetLocalZone()),
       Story.Command.resolve(
         Chat.RequestHistory,
@@ -110,8 +113,8 @@ describe("chat update", () => {
         ...connectedChat,
         connection: Chat.ConnectionConnecting(),
       }),
-      Story.message(Chat.Connected()),
-      Story.Command.expectExact(Chat.RequestHistory()),
+      Story.message(Chat.Connected({ roomId: "general" })),
+      Story.Command.expectExact(Chat.RequestHistory({ roomId: "general" })),
       Story.Command.resolve(
         Chat.RequestHistory,
         Chat.CompletedRequestHistory(),
@@ -120,7 +123,10 @@ describe("chat update", () => {
   });
 
   test("submitting a connected chat message sends and clears the input", () => {
-    const sendMessageCommand = Chat.SendMessage({ text: "hello" });
+    const sendMessageCommand = Chat.SendMessage({
+      roomId: "general",
+      text: "hello",
+    });
 
     Story.story(
       Chat.update,
@@ -152,6 +158,7 @@ describe("chat update", () => {
       Story.with({ ...connectedChat, messages: [helloMessage] }),
       Story.message(
         Chat.ReceivedHistory({
+          roomId: "general",
           messages: [helloMessage, followUpMessage],
           hasMore: false,
         }),
@@ -174,6 +181,7 @@ describe("chat update", () => {
       Story.with({ ...connectedChat, messages: [followUpMessage] }),
       Story.message(
         Chat.ReceivedOlderHistory({
+          roomId: "general",
           messages: [helloMessage],
           hasMore: false,
         }),
@@ -188,7 +196,12 @@ describe("chat update", () => {
     Story.story(
       Chat.update,
       Story.with({ ...connectedChat, messages: [helloMessage] }),
-      Story.message(Chat.ReceivedMessage({ message: followUpMessage })),
+      Story.message(
+        Chat.ReceivedMessage({
+          roomId: "general",
+          message: followUpMessage,
+        }),
+      ),
       Story.Command.expectExact(Chat.ScrollChatToBottom()),
       Story.Command.resolve(
         Chat.ScrollChatToBottom,
@@ -210,5 +223,30 @@ describe("chat update", () => {
     expect(nextModel.connection._tag).toBe("ConnectionConnecting");
     expect(nextModel.messages).toEqual([]);
     expect(Option.isSome(nextModel.maybeZone)).toBe(true);
+  });
+
+  test("stale socket events from the previous room are ignored", () => {
+    Story.story(
+      Chat.update,
+      Story.with({
+        ...connectedChat,
+        roomId: "random",
+        connection: Chat.ConnectionConnecting(),
+      }),
+      Story.message(Chat.Disconnected({ roomId: "general" })),
+      Story.message(
+        Chat.ReceivedHistory({
+          roomId: "general",
+          messages: [helloMessage],
+          hasMore: false,
+        }),
+      ),
+      Story.Command.expectNone(),
+      Story.model((model) => {
+        expect(model.roomId).toBe("random");
+        expect(model.connection._tag).toBe("ConnectionConnecting");
+        expect(model.messages).toEqual([]);
+      }),
+    );
   });
 });
