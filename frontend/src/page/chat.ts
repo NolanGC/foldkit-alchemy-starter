@@ -34,7 +34,6 @@ import { evo } from "foldkit/struct";
 import { CHAT_SERVICE_URL } from "../config";
 
 const CONNECTION_TIMEOUT_MS = 5000;
-const SENDER_LABEL_LENGTH = 5;
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 
@@ -688,9 +687,6 @@ const connectionStatusView = (connection: ConnectionState): Html => {
   );
 };
 
-const senderLabel = (senderId: string): string =>
-  `user-${senderId.slice(0, SENDER_LABEL_LENGTH)}`;
-
 const messageTime = (
   createdAt: DateTime.Utc,
   maybeZone: Option.Option<DateTime.TimeZone>,
@@ -773,7 +769,7 @@ const messagesView = (
                   h.p(
                     [h.Class("text-xs text-neutral-500")],
                     [
-                      `${senderLabel(message.senderId)} · ${messageTime(message.createdAt, maybeZone)}`,
+                      `${message.senderName} · ${messageTime(message.createdAt, maybeZone)}`,
                     ],
                   ),
                   h.p(

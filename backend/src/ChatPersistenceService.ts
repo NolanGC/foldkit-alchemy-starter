@@ -8,7 +8,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import type { ChatHistoryCursor, ChatMessage } from "./ChatProtocol.ts";
 import { Hyperdrive } from "./Db.ts";
-import { ChatMessages, Rooms, type ChatMessageRow } from "./schema.ts";
+import { ChatMessages, Rooms, User } from "./schema.ts";
 
 // The wire type is the `ChatMessage` schema's encoded form: `createdAt` is
 // epoch millis there (`S.DateTimeUtcFromMillis`), which survives the
@@ -36,9 +36,20 @@ type ChatPersistenceServiceApi = {
   listRooms: () => Effect.Effect<ReadonlyArray<string>>;
 };
 
-const toPersistedChatMessage = (row: ChatMessageRow): PersistedChatMessage => ({
+type HistoryRow = {
+  id: string;
+  senderId: string;
+  senderName: string | null;
+  body: string;
+  createdAt: Date;
+};
+
+const toPersistedChatMessage = (row: HistoryRow): PersistedChatMessage => ({
   id: row.id,
   senderId: row.senderId,
+  // The FK is ON DELETE CASCADE so a null join result shouldn't happen, but
+  // a placeholder beats failing the whole history page if it ever does.
+  senderName: row.senderName ?? "unknown",
   body: row.body,
   createdAt: row.createdAt.getTime(),
 });
@@ -75,8 +86,15 @@ export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersis
       ) =>
         Effect.gen(function* () {
           const rows = yield* db
-            .select()
+            .select({
+              id: ChatMessages.id,
+              senderId: ChatMessages.senderId,
+              senderName: User.name,
+              body: ChatMessages.body,
+              createdAt: ChatMessages.createdAt,
+            })
             .from(ChatMessages)
+            .leftJoin(User, eq(ChatMessages.senderId, User.id))
             .where(
               and(
                 eq(ChatMessages.roomId, roomId),

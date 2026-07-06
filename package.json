@@ -22,6 +22,7 @@
     "@effect/platform-node": "4.0.0-beta.88",
     "@effect/sql-pg": "4.0.0-beta.88",
     "alchemy": "^2.0.0-beta.59",
+    "better-auth": "^1.6.23",
     "drizzle-orm": "1.0.0-rc.1",
     "effect": "4.0.0-beta.88",
     "pg": "^8.13.0",

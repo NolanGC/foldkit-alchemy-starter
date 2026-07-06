@@ -2,21 +2,26 @@ import { DateTime } from "effect";
 import { Scene } from "foldkit";
 import { describe, test } from "vitest";
 
-import { RoomsLoaded, update, view, type Model } from "./main";
+import { Option } from "effect";
+
+import { RoomsLoaded, SignInMode, update, view, type Model } from "./main";
 import { Chat } from "./page";
-import { ChatRoute, HomeRoute, NotFoundRoute } from "./route";
+import { ChatRoute, HomeRoute, LoginRoute, NotFoundRoute } from "./route";
 
 const createdAt = DateTime.makeUnsafe(0);
 
 const helloMessage = {
   id: "message-1",
   senderId: "ada00000-0000-0000-0000-000000000000",
+  senderName: "Ada",
   body: "hello from ada",
   createdAt,
 };
 
 const connectedModel: Model = {
+  _tag: "LoggedIn",
   route: ChatRoute({ roomId: "general" }),
+  session: { userId: "user-ada", email: "ada@example.com", name: "Ada" },
   rooms: RoomsLoaded({ roomIds: ["general", "random", "feature-requests"] }),
   chatPage: {
     ...Chat.init("general"),
@@ -25,7 +30,48 @@ const connectedModel: Model = {
   },
 };
 
+const loggedOutModel: Model = {
+  _tag: "LoggedOut",
+  route: LoginRoute(),
+  mode: SignInMode(),
+  name: "",
+  email: "",
+  password: "",
+  pending: false,
+  error: Option.none(),
+  checkingSession: false,
+  chatPage: Chat.init("general"),
+};
+
 describe("view", () => {
+  test("logged out, the login route renders the sign-in form", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with(loggedOutModel),
+      Scene.expect(Scene.role("heading", { name: "Sign in" })).toExist(),
+      Scene.expect(Scene.label("Email")).toExist(),
+      Scene.expect(Scene.label("Password")).toExist(),
+      Scene.expect(Scene.role("button", { name: "Sign in" })).toBeEnabled(),
+    );
+  });
+
+  test("logged out, the landing page links to sign in", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({ ...loggedOutModel, route: HomeRoute() }),
+      Scene.expect(Scene.role("link", { name: "Sign in to chat →" })).toExist(),
+    );
+  });
+
+  test("logged in, the nav shows the user and a sign out button", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with(connectedModel),
+      Scene.expect(Scene.text("Ada")).toExist(),
+      Scene.expect(Scene.role("button", { name: "Sign out" })).toExist(),
+    );
+  });
+
   test("the home route renders the landing page", () => {
     Scene.scene(
       { update, view },

@@ -35,6 +35,8 @@ document.body.appendChild(container);
 Runtime.run(
   Runtime.makeApplication({
     Model: main.Model,
+    Flags: main.Flags,
+    flags: main.flags,
     init: main.init,
     update: main.update,
     view: main.view,

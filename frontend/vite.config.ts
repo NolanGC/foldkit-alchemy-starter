@@ -33,7 +33,12 @@ const prerenderLanding = (): Plugin => {
         const definedEnv = Object.fromEntries(
           Object.entries(config.define ?? {}).flatMap(([key, value]) =>
             key.startsWith(IMPORT_META_ENV_PREFIX)
-              ? [[key.slice(IMPORT_META_ENV_PREFIX.length), JSON.parse(String(value))]]
+              ? [
+                  [
+                    key.slice(IMPORT_META_ENV_PREFIX.length),
+                    JSON.parse(String(value)),
+                  ],
+                ]
               : [],
           ),
         );
@@ -44,7 +49,10 @@ const prerenderLanding = (): Plugin => {
 
         const result = spawnSync(
           "bun",
-          [fileURLToPath(new URL("scripts/prerender.ts", import.meta.url)), outdir],
+          [
+            fileURLToPath(new URL("scripts/prerender.ts", import.meta.url)),
+            outdir,
+          ],
           {
             stdio: "inherit",
             env: { ...process.env, ...fileEnv, ...definedEnv },

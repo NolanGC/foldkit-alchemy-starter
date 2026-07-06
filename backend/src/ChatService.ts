@@ -1,8 +1,11 @@
+import type { RuntimeContext } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Array from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as S from "effect/Schema";
+import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -10,13 +13,10 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 // Relevant: https://v2.alchemy.run/cloudflare/compute/hibernatable-websockets/#_top
 
+import { BetterAuth, isAllowedOrigin, type AuthUser } from "./Auth.ts";
 import ChatPersistenceService from "./ChatPersistenceService.ts";
+import { USER_ID_HEADER, USER_NAME_HEADER } from "./ChatProtocol.ts";
 import Room from "./DurableObject.ts";
-
-// The frontend is served from a different origin than this worker, so the
-// rooms endpoint must be CORS-readable. GET-only and credential-free, so a
-// wildcard is fine.
-const corsHeaders = { "access-control-allow-origin": "*" };
 
 export default class ChatService extends Cloudflare.Worker<ChatService>()(
   "ChatService",
@@ -29,21 +29,61 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
     const persistence = yield* Cloudflare.Workers.bindWorker(
       ChatPersistenceService,
     );
+    const auth = yield* BetterAuth;
+
+    // Resolve the caller's session from the request cookie. Runs on every
+    // gated route; BetterAuth's session lookup is a single indexed query
+    // through Hyperdrive.
+    const sessionUser: Effect.Effect<
+      Option.Option<AuthUser>,
+      never,
+      RuntimeContext | HttpServerRequest.HttpServerRequest
+    > = Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      return yield* auth.sessionUser(request.source as Request);
+    });
+
+    const unauthorized = HttpServerResponse.text("Unauthorized", {
+      status: 401,
+    });
 
     return {
       fetch: yield* HttpRouter.toHttpEffect(
         Layer.mergeAll(
+          // Credentialed CORS: the session cookie only flows cross-origin
+          // when the specific origin is echoed back (a wildcard is invalid
+          // with credentials), so the policy lives in `isAllowedOrigin`.
+          HttpRouter.middleware(
+            HttpMiddleware.cors({
+              allowedOrigins: isAllowedOrigin,
+              credentials: true,
+            }),
+            { global: true },
+          ),
           HttpRouter.add("GET", "/", HttpServerResponse.text("ok")),
+          // BetterAuth owns everything under /api/auth/* (sign-up, sign-in,
+          // sign-out, get-session, and OAuth callbacks later).
+          HttpRouter.add(
+            "*",
+            "/api/auth/*",
+            Effect.gen(function* () {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              const source = request.source as Request;
+              const response = yield* auth.withAuth(source.url, (instance) =>
+                instance.handler(source),
+              );
+              return HttpServerResponse.fromWeb(response);
+            }),
+          ),
           HttpRouter.add(
             "GET",
             "/api/rooms",
-            persistence
-              .listRooms()
-              .pipe(
-                Effect.flatMap((roomIds) =>
-                  HttpServerResponse.json(roomIds, { headers: corsHeaders }),
-                ),
-              ),
+            Effect.gen(function* () {
+              const maybeUser = yield* sessionUser;
+              if (Option.isNone(maybeUser)) return unauthorized;
+              const roomIds = yield* persistence.listRooms();
+              return yield* HttpServerResponse.json(roomIds).pipe(Effect.orDie);
+            }),
           ),
           HttpRouter.add(
             "GET",
@@ -55,6 +95,11 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
                   status: 426,
                 });
               }
+              // The browser sends the session cookie on the upgrade request;
+              // reject before the socket ever reaches the room.
+              const maybeUser = yield* sessionUser;
+              if (Option.isNone(maybeUser)) return unauthorized;
+              const user = maybeUser.value;
               const { roomId } = yield* HttpRouter.schemaPathParams(
                 S.Struct({ roomId: S.String }),
               ).pipe(Effect.orDie);
@@ -65,11 +110,20 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
                 });
               }
               const room = rooms.getByName(roomId);
-              return yield* room.fetch(request);
+              // Forward the verified identity to the Durable Object as
+              // headers; the DO trusts them because it is only reachable
+              // through this worker.
+              const source = request.source as Request;
+              const headers = new Headers(source.headers);
+              headers.set(USER_ID_HEADER, user.id);
+              headers.set(USER_NAME_HEADER, encodeURIComponent(user.name));
+              return yield* room.fetch(
+                HttpServerRequest.fromWeb(new Request(source, { headers })),
+              );
             }),
           ),
         ).pipe(Layer.provide(HttpPlatform.layer)),
       ),
     };
-  }),
+  }).pipe(Effect.provide(Cloudflare.Hyperdrive.ConnectBinding)),
 ) {}

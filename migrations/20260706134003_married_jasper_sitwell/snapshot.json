@@ -2,9 +2,7 @@
   "version": "8",
   "dialect": "postgres",
   "id": "32a20adc-20e0-49c0-ab03-b305c141da0b",
-  "prevIds": [
-    "660691d6-c593-40db-8514-584ce992a5eb"
-  ],
+  "prevIds": ["660691d6-c593-40db-8514-584ce992a5eb"],
   "ddl": [
     {
       "isRlsEnabled": false,
@@ -125,9 +123,7 @@
       "table": "chat_messages"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "chat_messages_pkey",
       "schema": "public",
@@ -135,9 +131,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "rooms_pkey",
       "schema": "public",

@@ -3,16 +3,32 @@ import { Story } from "foldkit";
 import { type Url } from "foldkit/url";
 import { describe, expect, test } from "vitest";
 
-import { GotChatMessage, GotRooms, init, update } from "./main";
+import { GotChatMessage, GotRooms, init, update, type Model } from "./main";
 import { Chat } from "./page";
 import { ChatRoute } from "./route";
 
 const createdAt = DateTime.makeUnsafe(0);
 const localZone = DateTime.zoneMakeLocal();
 
+const session = {
+  userId: "user-1",
+  email: "ada@example.com",
+  name: "Ada",
+};
+const loggedInFlags = { maybeSession: Option.some(session) };
+const loggedOutFlags = { maybeSession: Option.none<typeof session>() };
+
+const asLoggedIn = (model: Model): Extract<Model, { _tag: "LoggedIn" }> => {
+  if (model._tag !== "LoggedIn") {
+    throw new Error(`Expected LoggedIn model, got ${model._tag}`);
+  }
+  return model;
+};
+
 const helloMessage = {
   id: "message-1",
   senderId: "sender-1",
+  senderName: "Sender One",
   body: "hello",
   createdAt,
 };
@@ -20,6 +36,7 @@ const helloMessage = {
 const followUpMessage = {
   id: "message-2",
   senderId: "sender-2",
+  senderName: "Sender Two",
   body: "hi back",
   createdAt,
 };
@@ -39,41 +56,54 @@ const url = (pathname: string): Url => ({
 });
 
 describe("update", () => {
-  test("init on the home route joins the general room and fetches rooms", () => {
-    const [model, commands] = init(url("/"));
+  test("init with a cached session lands logged in and fetches rooms", () => {
+    const [model, commands] = init(loggedInFlags, url("/"));
+    const loggedIn = asLoggedIn(model);
 
-    expect(model.route._tag).toBe("Home");
-    expect(model.rooms._tag).toBe("RoomsLoading");
-    expect(model.chatPage.roomId).toBe("general");
-    expect(model.chatPage.connection._tag).toBe("ConnectionConnecting");
-    expect(commands).toHaveLength(1);
+    expect(loggedIn.route._tag).toBe("Home");
+    expect(loggedIn.rooms._tag).toBe("RoomsLoading");
+    expect(loggedIn.chatPage.roomId).toBe("general");
+    // FetchRooms + the boot-time CheckSession revalidation.
+    expect(commands).toHaveLength(2);
   });
 
   test("init from a chat route captures the room id", () => {
-    const [model] = init(url("/chat/random"));
+    const [model] = init(loggedInFlags, url("/chat/random"));
+    const loggedIn = asLoggedIn(model);
 
-    expect(model.route).toEqual(ChatRoute({ roomId: "random" }));
-    expect(model.chatPage.roomId).toBe("random");
+    expect(loggedIn.route).toEqual(ChatRoute({ roomId: "random" }));
+    expect(loggedIn.chatPage.roomId).toBe("random");
+  });
+
+  test("init without a session redirects chat routes to login", () => {
+    const [model, commands] = init(loggedOutFlags, url("/chat/general"));
+
+    expect(model._tag).toBe("LoggedOut");
+    expect(model.route._tag).toBe("Login");
+    // RedirectToLogin + CheckSession.
+    expect(commands).toHaveLength(2);
   });
 
   test("the fetched room list is stored", () => {
-    const [model] = init(url("/"));
+    const [model] = init(loggedInFlags, url("/"));
     const [next] = update(
       model,
       GotRooms({ roomIds: ["general", "random", "feature-requests"] }),
     );
+    const loggedIn = asLoggedIn(next);
 
-    expect(next.rooms._tag).toBe("RoomsLoaded");
-    expect(next.rooms).toMatchObject({
+    expect(loggedIn.rooms._tag).toBe("RoomsLoaded");
+    expect(loggedIn.rooms).toMatchObject({
       roomIds: ["general", "random", "feature-requests"],
     });
   });
 
   test("chat messages are delegated into the chat page", () => {
-    const [model] = init(url("/"));
+    const [model] = init(loggedInFlags, url("/"));
+    const loggedIn = asLoggedIn(model);
     const loadedModel = {
-      ...model,
-      chatPage: { ...model.chatPage, history: loadedHistory([]) },
+      ...loggedIn,
+      chatPage: { ...loggedIn.chatPage, history: loadedHistory([]) },
     };
 
     Story.story(
@@ -202,7 +232,10 @@ describe("chat update", () => {
   test("older history is prepended", () => {
     Story.story(
       Chat.update,
-      Story.with({ ...connectedChat, history: loadedHistory([followUpMessage]) }),
+      Story.with({
+        ...connectedChat,
+        history: loadedHistory([followUpMessage]),
+      }),
       Story.message(
         Chat.ReceivedOlderHistory({
           roomId: "general",

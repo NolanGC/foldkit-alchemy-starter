@@ -2,9 +2,15 @@ import * as S from "effect/Schema";
 
 export const MAX_CHAT_MESSAGE_BODY_LENGTH = 2000;
 
+// Headers ChatService uses to forward the verified session identity to the
+// Room durable object (which is only reachable through ChatService).
+export const USER_ID_HEADER = "x-chat-user-id";
+export const USER_NAME_HEADER = "x-chat-user-name";
+
 export const ChatMessage = S.Struct({
   id: S.String,
   senderId: S.String,
+  senderName: S.String,
   body: S.String,
   createdAt: S.DateTimeUtcFromMillis,
 });

@@ -7,6 +7,7 @@ import * as Ref from "effect/Ref";
 import * as S from "effect/Schema";
 import * as String_ from "effect/String";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import {
   ChatMessage,
@@ -14,6 +15,8 @@ import {
   ClientFrame,
   MAX_CHAT_MESSAGE_BODY_LENGTH,
   ServerFrame,
+  USER_ID_HEADER,
+  USER_NAME_HEADER,
 } from "./ChatProtocol.ts";
 import ChatPersistenceService from "./ChatPersistenceService.ts";
 
@@ -30,7 +33,15 @@ const encodeServerFrame = S.encodeSync(S.fromJsonString(ServerFrame));
 const decodeChatMessage = S.decodeSync(ChatMessage);
 const encodeChatMessage = S.encodeSync(ChatMessage);
 
-type Attachment = { id: string; roomId: string };
+// `socketId` keys the in-memory session map (one user may hold several
+// sockets across tabs); `userId`/`userName` are the verified identity that
+// ChatService resolved from the session cookie on upgrade.
+type Attachment = {
+  socketId: string;
+  userId: string;
+  userName: string;
+  roomId: string;
+};
 
 type HistoryCache = {
   readonly messages: ReadonlyArray<ChatMessage>;
@@ -69,7 +80,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
 
       for (const socket of yield* state.getWebSockets()) {
         const data = socket.deserializeAttachment<Attachment>();
-        if (data) sessions.set(data.id, socket);
+        if (data) sessions.set(data.socketId, socket);
       }
 
       const loadHistory = (roomId: string, cursor?: ChatHistoryCursor) =>
@@ -127,11 +138,23 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
         fetch: Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
           const roomId = roomIdFromRequestUrl(request.url);
+          // Identity is stamped on the request by ChatService after cookie
+          // validation; a request without it never went through the gate.
+          const userId = request.headers[USER_ID_HEADER];
+          const encodedUserName = request.headers[USER_NAME_HEADER];
+          if (userId === undefined || encodedUserName === undefined) {
+            return HttpServerResponse.text("Unauthorized", { status: 401 });
+          }
           const [response, socket] = yield* Cloudflare.upgrade();
-          const id = crypto.randomUUID();
+          const socketId = crypto.randomUUID();
 
-          socket.serializeAttachment({ id, roomId } satisfies Attachment);
-          sessions.set(id, socket);
+          socket.serializeAttachment({
+            socketId,
+            userId,
+            userName: decodeURIComponent(encodedUserName),
+            roomId,
+          } satisfies Attachment);
+          sessions.set(socketId, socket);
 
           return response;
         }),
@@ -182,7 +205,8 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
 
           const chatMessage: ChatMessage = {
             id: crypto.randomUUID(),
-            senderId: attachment.id,
+            senderId: attachment.userId,
+            senderName: attachment.userName,
             body,
             createdAt: yield* DateTime.now,
           };
@@ -207,7 +231,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
           reason: string,
         ) {
           const attachment = ws.deserializeAttachment<Attachment>();
-          if (attachment) sessions.delete(attachment.id);
+          if (attachment) sessions.delete(attachment.socketId);
           yield* ws.close(code, reason);
         }),
       };

@@ -5,8 +5,10 @@ import { overlay } from "@foldkit/devtools";
 import {
   ChangedUrl,
   ClickedLink,
+  Flags,
   Model,
   Message,
+  flags,
   init,
   managedResources,
   subscriptions,
@@ -17,6 +19,8 @@ import "./styles.css";
 
 const application = Runtime.makeApplication({
   Model,
+  Flags,
+  flags,
   init,
   update,
   view,
