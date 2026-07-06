@@ -207,10 +207,14 @@ export const view = (model: Model): Document => {
   return {
     title: routeTitle(model),
     body: h.div(
-      [h.Class("min-h-screen bg-neutral-950 text-neutral-100")],
+      [h.Class("flex h-screen flex-col overflow-hidden bg-neutral-950 text-neutral-100")],
       [
         navigationView(model.route),
-        h.keyed("main")(routeKey(model), [], [routeContent]),
+        h.keyed("main")(
+          routeKey(model),
+          [h.Class("min-h-0 flex-1 overflow-hidden")],
+          [routeContent],
+        ),
       ],
     ),
   };

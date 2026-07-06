@@ -17,12 +17,17 @@ import {
   Stream,
   String as String_,
 } from "effect";
-import { Command, ManagedResource, Submodel, Subscription } from "foldkit";
+import {
+  Command,
+  ManagedResource,
+  Render,
+  Submodel,
+  Subscription,
+} from "foldkit";
 import { html, type Html } from "foldkit/html";
 import { m } from "foldkit/message";
 import { ts } from "foldkit/schema";
 import { evo } from "foldkit/struct";
-import { generateSlug } from "random-word-slugs";
 
 const CONNECTION_TIMEOUT_MS = 5000;
 
@@ -30,6 +35,8 @@ const CHAT_SERVICE_URL = import.meta.env.VITE_CHAT_SERVICE_URL;
 if (CHAT_SERVICE_URL === undefined) {
   throw new Error("VITE_CHAT_SERVICE_URL is not set.");
 }
+
+const CHAT_MESSAGES_SCROLL_ID = "chat-messages-scroll";
 
 const decodeServerFrame = S.decodeUnknownOption(S.fromJsonString(ServerFrame));
 const encodeClientFrame = S.encodeSync(S.fromJsonString(ClientFrame));
@@ -66,6 +73,7 @@ export type ChatSocketService = ManagedResource.ServiceOf<typeof ChatSocket>;
 
 export const Connected = m("Connected");
 export const CompletedRequestHistory = m("CompletedRequestHistory");
+export const CompletedScrollChatToBottom = m("CompletedScrollChatToBottom");
 export const Disconnected = m("Disconnected");
 export const FailedConnect = m("FailedConnect", { error: S.String });
 export const GotLocalZone = m("GotLocalZone", { zone: S.TimeZone });
@@ -90,6 +98,7 @@ export const ReceivedMessage = m("ReceivedMessage", { message: ChatMessage });
 export const Message = S.Union([
   Connected,
   CompletedRequestHistory,
+  CompletedScrollChatToBottom,
   Disconnected,
   FailedConnect,
   GotLocalZone,
@@ -188,6 +197,23 @@ export const GetLocalZone = Command.define(
   GotLocalZone,
 )(Effect.sync(() => GotLocalZone({ zone: DateTime.zoneMakeLocal() })));
 
+export const ScrollChatToBottom = Command.define(
+  "ScrollChatToBottom",
+  CompletedScrollChatToBottom,
+)(
+  Effect.gen(function* () {
+    yield* Render.afterPaint;
+    yield* Effect.sync(() => {
+      const element = document.getElementById(CHAT_MESSAGES_SCROLL_ID);
+      if (element === null) {
+        return;
+      }
+      element.scrollTop = element.scrollHeight;
+    });
+    return CompletedScrollChatToBottom();
+  }),
+);
+
 // UPDATE
 
 type UpdateReturn = readonly [
@@ -209,6 +235,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       ],
 
       CompletedRequestHistory: () => [model, []],
+
+      CompletedScrollChatToBottom: () => [model, []],
 
       Disconnected: () => [
         evo(model, { connection: () => ConnectionDisconnected() }),
@@ -274,7 +302,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           messages: () => messages,
           hasMoreHistory: () => hasMore,
         }),
-        [],
+        [ScrollChatToBottom()],
       ],
 
       ReceivedOlderHistory: ({ messages, hasMore }) => [
@@ -287,7 +315,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
       ReceivedMessage: ({ message }) => [
         evo(model, { messages: (messages) => [...messages, message] }),
-        [],
+        [ScrollChatToBottom()],
       ],
     }),
   );
@@ -453,7 +481,7 @@ export const view = Submodel.defineView<Model, Message>((model): Html => {
   const h = html<Message>();
 
   return h.section(
-    [h.Class("mx-auto flex min-h-[calc(100vh-120px)] max-w-5xl px-4 py-8")],
+    [h.Class("mx-auto flex h-full max-w-5xl px-4 py-8")],
     [
       h.div(
         [h.Class("flex min-h-0 w-full flex-col gap-4")],
@@ -502,9 +530,7 @@ const connectionStatusView = (connection: ConnectionState): Html => {
 };
 
 const senderLabel = (senderId: string): string =>
-  `${generateSlug(2, {
-    format: "kebab",
-  })}-${senderId.slice(0, 3)}`;
+  `user-${senderId.slice(0, 5)}`;
 
 const messageTime = (
   createdAt: DateTime.Utc,
@@ -526,65 +552,77 @@ const messagesView = (
   const h = html<Message>();
 
   return h.div(
-    [h.Class("flex min-h-0 flex-1 flex-col justify-end overflow-y-auto")],
-    Array.match(messages, {
-      onEmpty: () => [
-        h.div(
-          [
-            h.Class(
-              "self-start border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-400",
-            ),
-          ],
-          ["No messages yet."],
-        ),
-      ],
-      onNonEmpty: (messages) => [
-        ...(hasMoreHistory
-          ? [
+    [
+      h.Id(CHAT_MESSAGES_SCROLL_ID),
+      h.Class(
+        "min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+      ),
+    ],
+    [
+      h.div(
+        [h.Class("mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end")],
+        [
+          ...Array.match(messages, {
+            onEmpty: () => [
               h.div(
-                [h.Class("mb-3 flex justify-center")],
                 [
-                  h.button(
-                    [
-                      h.Type("button"),
-                      h.OnClick(RequestedOlderHistory()),
-                      h.Class(
-                        "border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800",
-                      ),
-                    ],
-                    ["Load more"],
+                  h.Class(
+                    "border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-400",
                   ),
                 ],
+                ["No messages yet."],
               ),
-            ]
-          : []),
-        h.ul(
-          [h.Class("flex flex-col gap-3")],
-          Array.map(messages, (message) =>
-            h.keyed("li")(
-              message.id,
-              [
-                h.Class(
-                  "self-start border border-neutral-800 bg-neutral-900 px-4 py-3",
+            ],
+            onNonEmpty: (messages) => [
+              ...(hasMoreHistory
+                ? [
+                    h.div(
+                      [h.Class("mb-3 flex justify-center")],
+                      [
+                        h.button(
+                          [
+                            h.Type("button"),
+                            h.OnClick(RequestedOlderHistory()),
+                            h.Class(
+                              "border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800",
+                            ),
+                          ],
+                          ["Load more"],
+                        ),
+                      ],
+                    ),
+                  ]
+                : []),
+              h.ul(
+                [h.Class("flex flex-col gap-3")],
+                Array.map(messages, (message) =>
+                  h.keyed("li")(
+                    message.id,
+                    [
+                      h.Class(
+                        "self-start border border-neutral-800 bg-neutral-900 px-4 py-3",
+                      ),
+                    ],
+                    [
+                      h.p(
+                        [h.Class("text-xs text-neutral-500")],
+                        [
+                          `${senderLabel(message.senderId)} · ${messageTime(message.createdAt, maybeZone)}`,
+                        ],
+                      ),
+                      h.p(
+                        [h.Class("mt-1 break-words text-neutral-300")],
+                        [message.body],
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-              [
-                h.p(
-                  [h.Class("text-xs text-neutral-500")],
-                  [
-                    `${senderLabel(message.senderId)} · ${messageTime(message.createdAt, maybeZone)}`,
-                  ],
-                ),
-                h.p(
-                  [h.Class("mt-1 break-words text-neutral-300")],
-                  [message.body],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    }),
+              ),
+            ],
+          }),
+        ],
+      ),
+    ],
   );
 };
 
@@ -612,8 +650,12 @@ const messageInputView = (model: Model): Html => {
               h.label([...attributes.label, h.Class("sr-only")], ["Message"]),
               h.input([
                 ...attributes.input,
+                h.Autocomplete("off"),
+                h.Spellcheck(false),
+                h.Autocorrect("off"),
+                h.Autocapitalize("off"),
                 h.Class(
-                  "w-full border border-neutral-700 bg-neutral-950 px-4 py-3 text-neutral-100 placeholder:text-neutral-500 disabled:opacity-50",
+                  "w-full border border-neutral-700 bg-neutral-950 px-4 py-3 text-neutral-100 outline-none placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none focus:ring-0 disabled:opacity-50",
                 ),
               ]),
             ],

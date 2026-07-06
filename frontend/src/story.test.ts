@@ -62,6 +62,11 @@ describe("update", () => {
           message: Chat.ReceivedMessage({ message: helloMessage }),
         }),
       ),
+      Story.Command.resolve(
+        Chat.ScrollChatToBottom,
+        Chat.CompletedScrollChatToBottom(),
+        (message) => GotChatMessage({ message }),
+      ),
       Story.model((model) => {
         expect(model.chatPage.messages).toEqual([helloMessage]);
       }),
@@ -151,6 +156,11 @@ describe("chat update", () => {
           hasMore: false,
         }),
       ),
+      Story.Command.expectExact(Chat.ScrollChatToBottom()),
+      Story.Command.resolve(
+        Chat.ScrollChatToBottom,
+        Chat.CompletedScrollChatToBottom(),
+      ),
       Story.model((model) => {
         expect(model.messages).toEqual([helloMessage, followUpMessage]);
         expect(model.hasMoreHistory).toBe(false);
@@ -179,6 +189,11 @@ describe("chat update", () => {
       Chat.update,
       Story.with({ ...connectedChat, messages: [helloMessage] }),
       Story.message(Chat.ReceivedMessage({ message: followUpMessage })),
+      Story.Command.expectExact(Chat.ScrollChatToBottom()),
+      Story.Command.resolve(
+        Chat.ScrollChatToBottom,
+        Chat.CompletedScrollChatToBottom(),
+      ),
       Story.model((model) => {
         expect(model.messages).toEqual([helloMessage, followUpMessage]);
       }),
