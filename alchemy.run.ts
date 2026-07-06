@@ -28,6 +28,9 @@ export default Alchemy.Stack(
     const website = yield* Cloudflare.Website.Vite("Website", {
       rootDir: path.resolve(import.meta.dirname, "frontend"),
       dev: { port: 1337, strictPort: true },
+      assets: {
+        notFoundHandling: "single-page-application",
+      },
       env: {
         VITE_CHAT_SERVICE_URL: chat.url.as<string>(),
       },

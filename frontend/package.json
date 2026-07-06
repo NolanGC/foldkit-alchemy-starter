@@ -19,6 +19,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^20.10.6",
     "happy-dom": "^20.10.6",
     "vitest": "^4.1.9"
   }

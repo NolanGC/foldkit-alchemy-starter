@@ -53,6 +53,7 @@
         "vite": "8.0.10",
       },
       "devDependencies": {
+        "@happy-dom/global-registrator": "^20.10.6",
         "happy-dom": "^20.10.6",
         "vitest": "^4.1.9",
       },
@@ -229,6 +230,8 @@
     "@foldkit/frontend": ["@foldkit/frontend@workspace:frontend"],
 
     "@foldkit/ui": ["@foldkit/ui@0.122.0", "", { "dependencies": { "@floating-ui/dom": "^1.7.6" }, "peerDependencies": { "effect": "4.0.0-beta.88", "foldkit": "^0" } }, "sha512-b/3KsOblfBuKwasC9AdWRwfvDQhfXtY1UtrFVihagqmJhiQrC2lbe8uuLKh7S7dEbr0tyCXtGwI74CSna0FlLQ=="],
+
+    "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.6", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.6" } }, "sha512-Nu/IjRkkNxmeG2ywWsyJSO4d1BrWTqVzxCPL+gXj0b97klhmjd6wLzt6Bx/laNpkZ3WLW7zNCqmtMIbIlahqug=="],
 
     "@ioredis/commands": ["@ioredis/commands@1.10.0", "", {}, "sha512-UmeW7z4LfctwoQ5wkhVzgq8tXkreED2xZGpX+Bg+zA+WJFZCT6c062AfCK/Dfk81xZnnwdhJCUMkitihRaoC2Q=="],
 

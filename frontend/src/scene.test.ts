@@ -16,7 +16,7 @@ const helloMessage = {
 };
 
 const connectedModel: Model = {
-  route: HomeRoute(),
+  route: ChatRoute({ roomId: "general" }),
   chatPage: {
     ...Chat.init("general"),
     connection: Chat.ConnectionConnected(),
@@ -24,6 +24,15 @@ const connectedModel: Model = {
 };
 
 describe("view", () => {
+  test("the home route renders the landing page", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({ ...connectedModel, route: HomeRoute() }),
+      Scene.expect(Scene.role("heading", { name: "FoldkitChat" })).toExist(),
+      Scene.expect(Scene.role("link", { name: "Enter chat →" })).toExist(),
+    );
+  });
+
   test("an empty connected room renders the composer", () => {
     Scene.scene(
       { update, view },

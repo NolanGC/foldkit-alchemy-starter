@@ -106,9 +106,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           evo(model, {
             route: () => route,
             chatPage: (chatPage) =>
-              route._tag === "NotFound"
-                ? chatPage
-                : Chat.connect(chatPage, routeRoomId(route)),
+              route._tag === "Chat"
+                ? Chat.connect(chatPage, route.roomId)
+                : chatPage,
           }),
           [],
         ];
@@ -134,9 +134,9 @@ export const managedResources = ManagedResource.lift(Chat.managedResources)<
   Message
 >({
   toChildModel: (model) =>
-    model.route._tag === "NotFound"
-      ? Option.none()
-      : Option.some(model.chatPage),
+    model.route._tag === "Chat"
+      ? Option.some(model.chatPage)
+      : Option.none(),
   toParentMessage: (message) => GotChatMessage({ message }),
 });
 
@@ -153,12 +153,7 @@ export const subscriptions = Subscription.lift(Chat.subscriptions)<
 // VIEW
 
 const isActiveRoom = (route: AppRoute, roomId: string): boolean =>
-  M.value(route).pipe(
-    M.tag("Home", () => roomId === DEFAULT_ROOM_ID),
-    M.tag("Chat", (chatRoute) => chatRoute.roomId === roomId),
-    M.tag("NotFound", () => false),
-    M.exhaustive,
-  );
+  route._tag === "Chat" && route.roomId === roomId;
 
 const navigationView = (currentRoute: AppRoute): Html => {
   const h = html<Message>();
@@ -199,6 +194,10 @@ const navigationView = (currentRoute: AppRoute): Html => {
 export const view = (model: Model): Document => {
   const h = html<Message>();
 
+  if (model.route._tag === "Home") {
+    return { title: "FoldkitChat", body: landingView() };
+  }
+
   const routeContent =
     model.route._tag === "NotFound"
       ? notFoundView(model.route.path)
@@ -218,6 +217,35 @@ export const view = (model: Model): Document => {
       ],
     ),
   };
+};
+
+const landingView = (): Html => {
+  const h = html<Message>();
+
+  return h.main(
+    [h.Class("min-h-screen bg-neutral-950 px-6 py-24 text-neutral-100")],
+    [
+      h.div(
+        [h.Class("mx-auto max-w-xl")],
+        [
+          h.h1([h.Class("text-3xl font-bold")], ["FoldkitChat"]),
+          h.p(
+            [h.Class("mt-3 text-neutral-400")],
+            [
+              "A small realtime chat starter with typed state, managed resources, and edge-native deployment. Built with Foldkit, Alchemy, and Cloudflare.",
+            ],
+          ),
+          h.a(
+            [
+              h.Href(chatRouter({ roomId: DEFAULT_ROOM_ID })),
+              h.Class("mt-8 inline-block underline underline-offset-4"),
+            ],
+            ["Enter chat →"],
+          ),
+        ],
+      ),
+    ],
+  );
 };
 
 const chatView = (model: Model): Html => {

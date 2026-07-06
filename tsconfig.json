@@ -3,6 +3,7 @@
     "alchemy.run.ts",
     "backend/src/**/*.ts",
     "frontend/src/**/*.ts",
+    "frontend/scripts/**/*.ts",
     "frontend/vite.config.ts",
     "frontend/vitest.config.ts",
     "test/**/*.ts"
