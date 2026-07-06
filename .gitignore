@@ -37,3 +37,7 @@ reference_repos/
 # Alchemy local state
 .alchemy/
 .direnv
+
+# Session transcripts and scratch notes
+*-local-command-caveat*.txt
+notes/
