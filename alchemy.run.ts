@@ -17,7 +17,7 @@ export default Alchemy.Stack(
       Drizzle.providers(),
       Neon.providers(),
     ),
-    state: Alchemy.localState(),
+    state: Cloudflare.state(),
   },
   Effect.gen(function* () {
     const { branch } = yield* NeonDb;
