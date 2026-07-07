@@ -28,6 +28,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 *.tsbuildinfo
 reference_repos/
 
+# Vendored foldkit subtree (reference material for the foldkit skill, not app code)
+repos/foldkit/
+
 # IntelliJ based IDEs
 .idea
 
