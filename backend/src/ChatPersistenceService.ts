@@ -22,9 +22,9 @@ export type PersistedChatHistoryPage = {
 };
 
 type ChatPersistenceServiceApi = {
-  persistMessage: (
+  persistMessages: (
     roomId: string,
-    message: PersistedChatMessage,
+    messages: ReadonlyArray<PersistedChatMessage>,
   ) => Effect.Effect<void>;
   // NOTE: `cursor` is a plain optional parameter rather than an `Option`
   // because arguments cross the worker RPC boundary via structured clone,
@@ -69,15 +69,27 @@ export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersis
     return {
       fetch: Effect.succeed(HttpServerResponse.text("ok")),
 
-      persistMessage: (roomId: string, message: PersistedChatMessage) =>
+      persistMessages: (
+        roomId: string,
+        messages: ReadonlyArray<PersistedChatMessage>,
+      ) =>
         Effect.gen(function* () {
-          yield* db.insert(ChatMessages).values({
-            id: message.id,
-            roomId,
-            senderId: message.senderId,
-            body: message.body,
-            createdAt: new Date(message.createdAt),
-          });
+          if (!Array.isReadonlyArrayNonEmpty(messages)) return;
+          // Idempotent on the message id: the Room's outbox flush may be
+          // replayed after a partial failure (insert landed, outbox delete
+          // didn't), so duplicate batches must be no-ops.
+          yield* db
+            .insert(ChatMessages)
+            .values(
+              Array.map(messages, (message) => ({
+                id: message.id,
+                roomId,
+                senderId: message.senderId,
+                body: message.body,
+                createdAt: new Date(message.createdAt),
+              })),
+            )
+            .onConflictDoNothing();
         }),
 
       getRoomHistory: (

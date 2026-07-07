@@ -36,6 +36,20 @@ export default Alchemy.Stack(
       },
     });
 
+    // Website ⇄ ChatService is intentionally circular: the site needs the
+    // chat URL at build time, and the chat worker needs the site's origin
+    // for its credentialed-CORS allowlist (`Auth.ts` reads FRONTEND_ORIGIN
+    // from its environment). Alchemy resolves the cycle via bindings.
+    yield* chat.bind("FRONTEND_ORIGIN", {
+      bindings: [
+        {
+          type: "plain_text",
+          name: "FRONTEND_ORIGIN",
+          text: website.url.as<string>(),
+        },
+      ],
+    });
+
     return {
       chatUrl: chat.url.as<string>(),
       websiteUrl: website.url.as<string>(),

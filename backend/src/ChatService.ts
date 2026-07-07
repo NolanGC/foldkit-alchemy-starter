@@ -13,7 +13,12 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 // Relevant: https://v2.alchemy.run/cloudflare/compute/hibernatable-websockets/#_top
 
-import { BetterAuth, isAllowedOrigin, type AuthUser } from "./Auth.ts";
+import {
+  AuthError,
+  BetterAuth,
+  BetterAuthNeon,
+  type AuthUser,
+} from "./Auth.ts";
 import ChatPersistenceService from "./ChatPersistenceService.ts";
 import { USER_ID_HEADER, USER_NAME_HEADER } from "./ChatProtocol.ts";
 import Room from "./DurableObject.ts";
@@ -32,11 +37,11 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
     const auth = yield* BetterAuth;
 
     // Resolve the caller's session from the request cookie. Runs on every
-    // gated route; BetterAuth's session lookup is a single indexed query
-    // through Hyperdrive.
+    // gated route; BetterAuth's cookie cache answers most lookups without
+    // touching the database.
     const sessionUser: Effect.Effect<
       Option.Option<AuthUser>,
-      never,
+      AuthError,
       RuntimeContext | HttpServerRequest.HttpServerRequest
     > = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
@@ -47,8 +52,17 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
       status: 401,
     });
 
+    // The auth backend failing is a server-side outage, not a client
+    // problem: log it and degrade to a 503 instead of crashing the handler.
+    const authUnavailable = (error: AuthError) =>
+      Effect.logError("Auth backend unavailable", error.cause).pipe(
+        Effect.as(
+          HttpServerResponse.text("Service unavailable", { status: 503 }),
+        ),
+      );
+
     const cors = HttpMiddleware.cors({
-      allowedOrigins: isAllowedOrigin,
+      allowedOrigins: auth.isAllowedOrigin,
       credentials: true,
     });
 
@@ -57,7 +71,7 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
         Layer.mergeAll(
           // Credentialed CORS: the session cookie only flows cross-origin
           // when the specific origin is echoed back (a wildcard is invalid
-          // with credentials), so the policy lives in `isAllowedOrigin`.
+          // with credentials); the allowlist is the deployed frontend.
           // WebSocket upgrades are exempt: browsers don't enforce CORS on
           // them, and the 101 response's headers are immutable in workerd,
           // so appending CORS headers to it crashes the upgrade. The WS
@@ -82,7 +96,7 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
                 instance.handler(source),
               );
               return HttpServerResponse.fromWeb(response);
-            }),
+            }).pipe(Effect.catchTag("AuthError", authUnavailable)),
           ),
           HttpRouter.add(
             "GET",
@@ -92,7 +106,7 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
               if (Option.isNone(maybeUser)) return unauthorized;
               const roomIds = yield* persistence.listRooms();
               return yield* HttpServerResponse.json(roomIds).pipe(Effect.orDie);
-            }),
+            }).pipe(Effect.catchTag("AuthError", authUnavailable)),
           ),
           HttpRouter.add(
             "GET",
@@ -109,7 +123,7 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
               // would otherwise ride along on a hostile site's `new
               // WebSocket(...)` (cross-site WebSocket hijacking).
               const origin = request.headers.origin;
-              if (origin !== undefined && !isAllowedOrigin(origin)) {
+              if (origin !== undefined && !auth.isAllowedOrigin(origin)) {
                 return HttpServerResponse.text("Forbidden", { status: 403 });
               }
               // The browser sends the session cookie on the upgrade request;
@@ -137,14 +151,20 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
               return yield* room.fetch(
                 HttpServerRequest.fromWeb(new Request(source, { headers })),
               );
-            }),
+            }).pipe(Effect.catchTag("AuthError", authUnavailable)),
           ),
         ).pipe(Layer.provide(HttpPlatform.layer)),
       ),
     };
-    // `Layer.fresh`: this layer captures the host worker it binds to, and
-    // Effect memoizes layer builds globally — without `fresh`, the second
-    // worker to build it reuses the first worker's build and the Hyperdrive
-    // binding lands on only one of them.
-  }).pipe(Effect.provide(Layer.fresh(Cloudflare.Hyperdrive.ConnectBinding))),
+  }).pipe(
+    // `Layer.fresh`: ConnectBinding captures the host worker it binds to,
+    // and Effect memoizes layer builds globally — without `fresh`, the
+    // second worker to build it reuses the first worker's build and the
+    // Hyperdrive binding lands on only one of them.
+    Effect.provide(
+      BetterAuthNeon.pipe(
+        Layer.provide(Layer.fresh(Cloudflare.Hyperdrive.ConnectBinding)),
+      ),
+    ),
+  ),
 ) {}

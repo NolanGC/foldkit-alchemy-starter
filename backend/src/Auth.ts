@@ -1,10 +1,14 @@
+import type { RuntimeContext } from "alchemy";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Output from "alchemy/Output";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
+import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import pg from "pg";
@@ -14,17 +18,10 @@ import { Account, Session, User, Verification } from "./schema.ts";
 
 export const FRONTEND_DEV_ORIGIN = "http://localhost:1337";
 
-// Origins allowed to make credentialed requests against this worker. The
-// prod frontend lives on its own workers.dev subdomain; binding the exact
-// prod origin here would create a resource cycle (Website needs the chat
-// URL, chat would need the Website URL), so we accept any workers.dev
-// origin instead. Tighten this to the real origin once a custom domain
-// exists.
-export const isAllowedOrigin = (origin: string): boolean =>
-  origin === FRONTEND_DEV_ORIGIN ||
-  /^https:\/\/[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+\.workers\.dev$/.test(
-    origin,
-  );
+/** The auth backend (Postgres over Hyperdrive) failed mid-request. */
+export class AuthError extends Data.TaggedError("AuthError")<{
+  cause: unknown;
+}> {}
 
 export type AuthUser = {
   readonly id: string;
@@ -33,14 +30,23 @@ export type AuthUser = {
 };
 
 type MakeAuthOptions = {
-  connectionString: string;
   secret: string;
   baseOrigin: string;
+  frontendOrigin: string;
   isLocal: boolean;
 };
 
-const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) =>
-  betterAuth({
+// Origins allowed to make credentialed requests: the deployed frontend
+// (bound from the Website resource) and the local dev site. Nothing else —
+// a wildcard here would let any site ride the SameSite=None session cookie.
+const makeIsAllowedOrigin =
+  (frontendOrigin: string) =>
+  (origin: string): boolean =>
+    origin === frontendOrigin || origin === FRONTEND_DEV_ORIGIN;
+
+const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) => {
+  const isAllowedOrigin = makeIsAllowedOrigin(options.frontendOrigin);
+  return betterAuth({
     database: drizzleAdapter(drizzle({ client: pool }), {
       provider: "pg",
       schema: {
@@ -60,9 +66,17 @@ const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) =>
       // `emailVerification` at the same time.
       requireEmailVerification: false,
     },
+    session: {
+      // Short-lived signed cookie holding the session payload, so gated
+      // requests validate without a database round-trip until it expires.
+      cookieCache: {
+        enabled: true,
+        maxAge: 5 * 60,
+      },
+    },
     // BetterAuth checks the Origin header of state-changing requests
     // against this list; echoing the (validated) request origin keeps it in
-    // lockstep with the CORS policy above without hardcoding prod URLs.
+    // lockstep with the CORS policy in ChatService.
     trustedOrigins: (request) => {
       const origin = request?.headers.get("origin");
       return origin != null && isAllowedOrigin(origin) ? [origin] : [];
@@ -82,66 +96,103 @@ const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) =>
     // OAuth extension point — add providers here later, e.g.
     // socialProviders: { github: { clientId, clientSecret } }.
   });
+};
 
 type AuthInstance = ReturnType<typeof makeAuth>;
 
 /**
- * Effect-native BetterAuth for workers. Yields a client whose `withAuth`
- * builds a per-invocation BetterAuth instance over the shared Hyperdrive
- * connection: pg sockets cannot be reused across Worker invocations, so a
- * fresh single-connection pool is opened per request (cheap — Hyperdrive
- * does the real pooling server-side) and closed when the effect settles.
+ * Effect-native BetterAuth for workers. `withAuth` builds a per-invocation
+ * BetterAuth instance over the shared Hyperdrive connection: pg sockets
+ * cannot be reused across Worker invocations, so a fresh single-connection
+ * pool is opened per request (cheap — Hyperdrive does the real pooling
+ * server-side) and closed when the effect settles.
  */
-export const BetterAuth = Effect.gen(function* () {
-  const conn = yield* Cloudflare.Hyperdrive.Connect(Hyperdrive);
-  const secretResource = yield* Alchemy.Random("BetterAuthSecret");
-  // Registers a `secret_text` binding at deploy time and reads it back from
-  // the worker environment at runtime.
-  const secret = yield* Output.named(
-    Output.asOutput(secretResource.text),
-    "BETTER_AUTH_SECRET",
-  );
-
-  const withAuth = <A>(
-    requestUrl: string,
-    use: (auth: AuthInstance) => Promise<A>,
-  ) =>
-    Effect.gen(function* () {
-      const baseOrigin = new URL(requestUrl).origin;
-      const connectionString = Redacted.value(yield* conn.connectionString);
-      const secretValue = Redacted.value(yield* secret);
-      const pool = new pg.Pool({ connectionString, max: 1 });
-      return yield* Effect.promise(() =>
-        use(
-          makeAuth(pool, {
-            connectionString,
-            secret: secretValue,
-            baseOrigin,
-            isLocal: /^http:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(baseOrigin),
-          }),
-        ),
-      ).pipe(
-        Effect.ensuring(Effect.promise(() => pool.end()).pipe(Effect.ignore)),
-      );
-    });
-
-  return {
-    withAuth,
+export class BetterAuth extends Context.Service<
+  BetterAuth,
+  {
+    /**
+     * Whether `origin` may make credentialed requests against this worker.
+     * Reads the worker environment when called, so only invoke it inside a
+     * request handler (where the runtime env exists).
+     */
+    isAllowedOrigin: (origin: string) => boolean;
+    withAuth: <A>(
+      requestUrl: string,
+      use: (auth: AuthInstance) => Promise<A>,
+    ) => Effect.Effect<A, AuthError, RuntimeContext>;
     /** Resolve the session cookie on `request` to its user, if any. */
-    sessionUser: (request: Request) =>
-      withAuth(request.url, (auth) =>
-        auth.api.getSession({ headers: request.headers }),
-      ).pipe(
-        Effect.map((result) =>
-          Option.map(
-            Option.fromNullishOr(result),
-            ({ user }): AuthUser => ({
-              id: user.id,
-              name: user.name,
-              email: user.email,
-            }),
+    sessionUser: (
+      request: Request,
+    ) => Effect.Effect<Option.Option<AuthUser>, AuthError, RuntimeContext>;
+  }
+>()("BetterAuth") {}
+
+export const BetterAuthNeon = Layer.effect(
+  BetterAuth,
+  Effect.gen(function* () {
+    const conn = yield* Cloudflare.Hyperdrive.Connect(Hyperdrive);
+    const env = yield* Cloudflare.Workers.WorkerEnvironment;
+    const secretResource = yield* Alchemy.Random("BetterAuthSecret");
+    // Registers a `secret_text` binding at deploy time and reads it back
+    // from the worker environment at runtime.
+    const secret = yield* Output.named(
+      Output.asOutput(secretResource.text),
+      "BETTER_AUTH_SECRET",
+    );
+
+    // FRONTEND_ORIGIN is a plain-text binding attached in alchemy.run.ts
+    // (the Website's URL — it can't be bound from here without creating a
+    // module cycle with ChatService). Read lazily: it only exists at
+    // runtime, and this layer also builds at plan time.
+    const frontendOrigin = () => new URL(env.FRONTEND_ORIGIN as string).origin;
+
+    const withAuth = <A>(
+      requestUrl: string,
+      use: (auth: AuthInstance) => Promise<A>,
+    ) =>
+      Effect.gen(function* () {
+        const baseOrigin = new URL(requestUrl).origin;
+        const connectionString = Redacted.value(yield* conn.connectionString);
+        const secretValue = Redacted.value(yield* secret);
+        const frontend = frontendOrigin();
+        const pool = new pg.Pool({ connectionString, max: 1 });
+        return yield* Effect.tryPromise({
+          try: () =>
+            use(
+              makeAuth(pool, {
+                secret: secretValue,
+                baseOrigin,
+                frontendOrigin: frontend,
+                isLocal: /^http:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(
+                  baseOrigin,
+                ),
+              }),
+            ),
+          catch: (cause) => new AuthError({ cause }),
+        }).pipe(
+          Effect.ensuring(Effect.promise(() => pool.end()).pipe(Effect.ignore)),
+        );
+      });
+
+    return {
+      isAllowedOrigin: (origin: string) =>
+        makeIsAllowedOrigin(frontendOrigin())(origin),
+      withAuth,
+      sessionUser: (request: Request) =>
+        withAuth(request.url, (auth) =>
+          auth.api.getSession({ headers: request.headers }),
+        ).pipe(
+          Effect.map((result) =>
+            Option.map(
+              Option.fromNullishOr(result),
+              ({ user }): AuthUser => ({
+                id: user.id,
+                name: user.name,
+                email: user.email,
+              }),
+            ),
           ),
         ),
-      ),
-  };
-});
+    };
+  }),
+);
