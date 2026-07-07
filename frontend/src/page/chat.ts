@@ -284,6 +284,8 @@ type UpdateReturn = readonly [
 ];
 const withUpdateReturn = M.withReturnType<UpdateReturn>();
 
+// there exists a window between old room socket teardown, could still be getting frames
+// and new room switch, so we ignore messages from the wrong room
 const whenCurrentRoom =
   (model: Model) =>
   (roomId: string, run: () => UpdateReturn): UpdateReturn =>
@@ -335,7 +337,10 @@ export const update = (model: Model, message: Message): UpdateReturn => {
       ],
 
       UpdatedMessageInput: ({ value }) => [
-        evo(model, { messageInput: () => value, sendError: () => Option.none() }),
+        evo(model, {
+          messageInput: () => value,
+          sendError: () => Option.none(),
+        }),
         [],
       ],
 
@@ -456,40 +461,38 @@ export const managedResources = ManagedResource.make<Model, Message>()(
             attempt: model.reconnectAttempt,
           }),
         acquire: ({ roomId }) =>
-          Effect.callback<ChatSocketValue, ChatSocketAcquireError>(
-            (resume) => {
-              const url = new URL(CHAT_SERVICE_URL);
-              url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-              url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
-              const socket = new WebSocket(url);
+          Effect.callback<ChatSocketValue, ChatSocketAcquireError>((resume) => {
+            const url = new URL(CHAT_SERVICE_URL);
+            url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+            url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
+            const socket = new WebSocket(url);
 
-              const handleOpen = () => {
-                socket.removeEventListener("error", handleError);
-                resume(Effect.succeed({ roomId, socket }));
-              };
+            const handleOpen = () => {
+              socket.removeEventListener("error", handleError);
+              resume(Effect.succeed({ roomId, socket }));
+            };
 
-              const handleError = () => {
-                socket.removeEventListener("open", handleOpen);
-                resume(
-                  Effect.fail(
-                    new ChatSocketAcquireError({
-                      roomId,
-                      message: "Failed to connect to chat",
-                    }),
-                  ),
-                );
-              };
+            const handleError = () => {
+              socket.removeEventListener("open", handleOpen);
+              resume(
+                Effect.fail(
+                  new ChatSocketAcquireError({
+                    roomId,
+                    message: "Failed to connect to chat",
+                  }),
+                ),
+              );
+            };
 
-              socket.addEventListener("open", handleOpen);
-              socket.addEventListener("error", handleError);
+            socket.addEventListener("open", handleOpen);
+            socket.addEventListener("error", handleError);
 
-              return Effect.sync(() => {
-                socket.removeEventListener("open", handleOpen);
-                socket.removeEventListener("error", handleError);
-                socket.close();
-              });
-            },
-          ).pipe(
+            return Effect.sync(() => {
+              socket.removeEventListener("open", handleOpen);
+              socket.removeEventListener("error", handleError);
+              socket.close();
+            });
+          }).pipe(
             Effect.timeout(Duration.millis(CONNECTION_TIMEOUT_MS)),
             Effect.catchTag("TimeoutError", () =>
               Effect.fail(
@@ -715,7 +718,11 @@ const historyView = (
     ],
     [
       h.div(
-        [h.Class("mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end")],
+        [
+          h.Class(
+            "mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end",
+          ),
+        ],
         [
           M.value(history).pipe(
             M.tagsExhaustive({

@@ -100,18 +100,23 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
       const appendToHistory = (message: ChatMessage) =>
         Ref.update(
           historyCache,
-          Option.map((cache) => ({
-            messages: [...cache.messages, message].slice(-HISTORY_LIMIT),
-            hasMore: cache.hasMore,
-          })),
+          Option.map((cache) => {
+            const messages = [...cache.messages, message];
+            return {
+              messages: messages.slice(-HISTORY_LIMIT),
+              hasMore: cache.hasMore || messages.length > HISTORY_LIMIT,
+            };
+          }),
         );
 
       const persistMessage = (roomId: string, message: ChatMessage) =>
-        persistence.persistMessage(roomId, encodeChatMessage(message)).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("Failed to persist chat message", cause),
-          ),
-        );
+        persistence
+          .persistMessage(roomId, encodeChatMessage(message))
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("Failed to persist chat message", cause),
+            ),
+          );
 
       const broadcast = (text: string) =>
         Effect.forEach(sessions.values(), (peer) => peer.send(text), {
@@ -165,9 +170,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
             return;
           }
           if (body.length > MAX_CHAT_MESSAGE_BODY_LENGTH) {
-            // The shipped client enforces this client-side, so this only
-            // fires for a non-standard client; still worth an explicit
-            // signal rather than a silent drop.
+            // Should be handled by our client, for completeness keep this
             yield* socket.send(
               encodeServerFrame({
                 _tag: "Rejected",
@@ -184,7 +187,8 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
             createdAt: yield* DateTime.now,
           };
 
-          // Broadcast and persist concurrently: peers never wait on Postgres.
+          // Broadcast and persist concurrently
+          // TODO: Some logic to think through here
           yield* Effect.all(
             [
               broadcast(
