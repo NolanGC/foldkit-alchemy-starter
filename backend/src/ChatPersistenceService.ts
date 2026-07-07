@@ -4,6 +4,7 @@ import { and, desc, eq, lt, or } from "drizzle-orm";
 import * as Array from "effect/Array";
 import * as Effect from "effect/Effect";
 import { pipe } from "effect/Function";
+import * as Layer from "effect/Layer";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import type { ChatHistoryCursor, ChatMessage } from "./ChatProtocol.ts";
@@ -134,5 +135,7 @@ export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersis
           return Array.map(rows, (row) => row.id);
         }),
     };
-  }).pipe(Effect.provide(Cloudflare.Hyperdrive.ConnectBinding)),
+    // `Layer.fresh` for the same reason as in ChatService.ts: the layer
+    // build is memoized globally and captures its host worker.
+  }).pipe(Effect.provide(Layer.fresh(Cloudflare.Hyperdrive.ConnectBinding))),
 ) {}

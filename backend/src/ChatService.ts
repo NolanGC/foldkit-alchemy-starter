@@ -47,17 +47,26 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
       status: 401,
     });
 
+    const cors = HttpMiddleware.cors({
+      allowedOrigins: isAllowedOrigin,
+      credentials: true,
+    });
+
     return {
       fetch: yield* HttpRouter.toHttpEffect(
         Layer.mergeAll(
           // Credentialed CORS: the session cookie only flows cross-origin
           // when the specific origin is echoed back (a wildcard is invalid
           // with credentials), so the policy lives in `isAllowedOrigin`.
+          // WebSocket upgrades are exempt: browsers don't enforce CORS on
+          // them, and the 101 response's headers are immutable in workerd,
+          // so appending CORS headers to it crashes the upgrade. The WS
+          // route does its own Origin check instead.
           HttpRouter.middleware(
-            HttpMiddleware.cors({
-              allowedOrigins: isAllowedOrigin,
-              credentials: true,
-            }),
+            (app) =>
+              Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+                request.headers.upgrade === "websocket" ? app : cors(app),
+              ),
             { global: true },
           ),
           HttpRouter.add("GET", "/", HttpServerResponse.text("ok")),
@@ -95,6 +104,14 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
                   status: 426,
                 });
               }
+              // CORS never applied to WebSockets, so the upgrade needs its
+              // own Origin check: the session cookie is SameSite=None and
+              // would otherwise ride along on a hostile site's `new
+              // WebSocket(...)` (cross-site WebSocket hijacking).
+              const origin = request.headers.origin;
+              if (origin !== undefined && !isAllowedOrigin(origin)) {
+                return HttpServerResponse.text("Forbidden", { status: 403 });
+              }
               // The browser sends the session cookie on the upgrade request;
               // reject before the socket ever reaches the room.
               const maybeUser = yield* sessionUser;
@@ -125,5 +142,9 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
         ).pipe(Layer.provide(HttpPlatform.layer)),
       ),
     };
-  }).pipe(Effect.provide(Cloudflare.Hyperdrive.ConnectBinding)),
+    // `Layer.fresh`: this layer captures the host worker it binds to, and
+    // Effect memoizes layer builds globally — without `fresh`, the second
+    // worker to build it reuses the first worker's build and the Hyperdrive
+    // binding lands on only one of them.
+  }).pipe(Effect.provide(Layer.fresh(Cloudflare.Hyperdrive.ConnectBinding))),
 ) {}
