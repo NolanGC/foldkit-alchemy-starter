@@ -13,7 +13,7 @@ export const NeonDb = Effect.gen(function* () {
   });
 
   const project = stage.startsWith("pr-")
-    ? yield* Neon.Project.ref("app-db", { stage: `staging-${stage}` })
+    ? yield* Neon.Project.ref("app-db", { stage: "staging" })
     : yield* Neon.Project("app-db", {
         region: "aws-us-east-1",
       });
