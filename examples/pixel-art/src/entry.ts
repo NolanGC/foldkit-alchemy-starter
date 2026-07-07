@@ -1,0 +1,31 @@
+import { Runtime } from 'foldkit'
+
+import { overlay } from '@foldkit/devtools'
+
+import {
+  Flags,
+  Message,
+  Model,
+  flags,
+  init,
+  subscriptions,
+  update,
+  view,
+} from './main'
+
+const application = Runtime.makeApplication({
+  Model,
+  Flags,
+  flags,
+  init,
+  update,
+  view,
+  subscriptions,
+  container: document.getElementById('root'),
+  devTools: {
+    overlay,
+    Message,
+  },
+})
+
+Runtime.run(application)
