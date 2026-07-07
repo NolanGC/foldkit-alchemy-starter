@@ -1,3 +1,4 @@
+import { UserId } from "@foldkit/backend";
 import { Effect, Option, Schema as S } from "effect";
 import { Command } from "foldkit";
 import { m } from "foldkit/message";
@@ -8,7 +9,7 @@ import { CHAT_SERVICE_URL } from "./config";
 // authority is the http-only cookie BetterAuth set, which the server
 // validates on every gated request.
 export const Session = S.Struct({
-  userId: S.String,
+  userId: UserId,
   email: S.String,
   name: S.String,
 });
@@ -30,7 +31,7 @@ export const CompletedSessionPersistence = m("CompletedSessionPersistence");
 // API
 
 const UserPayload = S.Struct({
-  user: S.Struct({ id: S.String, email: S.String, name: S.String }),
+  user: S.Struct({ id: UserId, email: S.String, name: S.String }),
 });
 const decodeUserPayload = S.decodeUnknownOption(UserPayload);
 
@@ -53,17 +54,15 @@ const authFetch = (path: string, init?: RequestInit) =>
     return { response, body };
   });
 
-const errorMessage = (body: unknown, fallback: string): string => {
-  if (
-    typeof body === "object" &&
-    body !== null &&
-    "message" in body &&
-    typeof body.message === "string"
-  ) {
-    return body.message;
-  }
-  return fallback;
-};
+const decodeErrorPayload = S.decodeUnknownOption(
+  S.Struct({ message: S.String }),
+);
+
+const errorMessage = (body: unknown, fallback: string): string =>
+  Option.match(decodeErrorPayload(body), {
+    onNone: () => fallback,
+    onSome: ({ message }) => message,
+  });
 
 const postJson = (payload: unknown): RequestInit => ({
   method: "POST",

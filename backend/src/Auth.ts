@@ -13,10 +13,9 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import pg from "pg";
 
+import { UserId } from "./ChatProtocol.ts";
 import { Hyperdrive } from "./Db.ts";
 import { Account, Session, User, Verification } from "./schema.ts";
-
-export const FRONTEND_DEV_ORIGIN = "http://localhost:1337";
 
 /** The auth backend (Postgres over Hyperdrive) failed mid-request. */
 export class AuthError extends Data.TaggedError("AuthError")<{
@@ -24,7 +23,7 @@ export class AuthError extends Data.TaggedError("AuthError")<{
 }> {}
 
 export type AuthUser = {
-  readonly id: string;
+  readonly id: UserId;
   readonly name: string;
   readonly email: string;
 };
@@ -32,17 +31,20 @@ export type AuthUser = {
 type MakeAuthOptions = {
   secret: string;
   baseOrigin: string;
-  frontendOrigin: string;
+  frontendOrigin: Option.Option<string>;
   isLocal: boolean;
 };
 
-// Origins allowed to make credentialed requests: the deployed frontend
-// (bound from the Website resource) and the local dev site. Nothing else —
-// a wildcard here would let any site ride the SameSite=None session cookie.
+// Exactly one origin may make credentialed requests: the frontend bound as
+// FRONTEND_ORIGIN in alchemy.run.ts (the deployed Website in cloud stages,
+// http://localhost:1337 under `alchemy dev`). Nothing else — a wildcard
+// would let any site ride the SameSite=None session cookie, and even a
+// dev-localhost entry would let a local process hit production with it.
+// Option.none means the binding is missing (a wiring bug): deny everything.
 const makeIsAllowedOrigin =
-  (frontendOrigin: string) =>
+  (frontendOrigin: Option.Option<string>) =>
   (origin: string): boolean =>
-    origin === frontendOrigin || origin === FRONTEND_DEV_ORIGIN;
+    Option.exists(frontendOrigin, (allowed) => allowed === origin);
 
 const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) => {
   const isAllowedOrigin = makeIsAllowedOrigin(options.frontendOrigin);
@@ -143,8 +145,12 @@ export const BetterAuthNeon = Layer.effect(
     // FRONTEND_ORIGIN is a plain-text binding attached in alchemy.run.ts
     // (the Website's URL — it can't be bound from here without creating a
     // module cycle with ChatService). Read lazily: it only exists at
-    // runtime, and this layer also builds at plan time.
-    const frontendOrigin = () => new URL(env.FRONTEND_ORIGIN as string).origin;
+    // runtime, and this layer also builds at plan time. Empty means the
+    // first deploy of a fresh stage ran before the Website URL existed.
+    const frontendOrigin = (): Option.Option<string> => {
+      const raw = env.FRONTEND_ORIGIN as string | undefined;
+      return raw ? Option.some(new URL(raw).origin) : Option.none();
+    };
 
     const withAuth = <A>(
       requestUrl: string,
@@ -185,8 +191,10 @@ export const BetterAuthNeon = Layer.effect(
           Effect.map((result) =>
             Option.map(
               Option.fromNullishOr(result),
+              // BetterAuth just verified the session cookie, so this is the
+              // authoritative place to mint the branded id.
               ({ user }): AuthUser => ({
-                id: user.id,
+                id: UserId.make(user.id),
                 name: user.name,
                 email: user.email,
               }),

@@ -716,13 +716,17 @@ const historyView = (
       h.div(
         [
           h.Class(
-            "mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end",
+            `mx-auto flex min-h-full w-full max-w-3xl flex-col ${
+              history._tag === "HistoryLoading"
+                ? "justify-start"
+                : "justify-end"
+            }`,
           ),
         ],
         [
           M.value(history).pipe(
             M.tagsExhaustive({
-              HistoryLoading: () => h.empty,
+              HistoryLoading: () => historySkeletonView(),
               HistoryLoaded: ({ messages, hasMore }) =>
                 messagesView(messages, hasMore, maybeZone),
             }),
@@ -730,6 +734,36 @@ const historyView = (
         ],
       ),
     ],
+  );
+};
+
+const SKELETON_ROWS: ReadonlyArray<string> = [
+  "w-40",
+  "w-28",
+  "w-52",
+  "w-32",
+  "w-36",
+];
+
+const historySkeletonView = (): Html => {
+  const h = html<Message>();
+
+  return h.ul(
+    [h.Class("flex animate-pulse flex-col gap-3")],
+    SKELETON_ROWS.map((width, index) =>
+      h.keyed("li")(
+        `skeleton-${index}`,
+        [
+          h.Class(
+            "inline-flex w-fit max-w-2/3 flex-col gap-2 self-start border border-neutral-800/30 bg-neutral-900/30 px-4 py-3",
+          ),
+        ],
+        [
+          h.div([h.Class("h-2.5 w-16 rounded bg-neutral-800/40")], []),
+          h.div([h.Class(`h-3 ${width} rounded bg-neutral-800/40`)], []),
+        ],
+      ),
+    ),
   );
 };
 

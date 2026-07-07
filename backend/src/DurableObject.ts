@@ -2,6 +2,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Array from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as M from "effect/Match";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as S from "effect/Schema";
@@ -12,6 +13,9 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import {
   ChatMessage,
+  MessageId,
+  RoomId,
+  UserId,
   type ChatHistoryCursor,
   ClientFrame,
   MAX_CHAT_MESSAGE_BODY_LENGTH,
@@ -28,7 +32,7 @@ import ChatPersistenceService, {
 const HISTORY_LIMIT = 50;
 const BROADCAST_CONCURRENCY = 32;
 
-// Outbox flush cadence: messages become durable in DO SQLite immediately;
+// Outbox flush cadence, messages get written to DO SQLite immediately
 // the alarm archives them to Postgres in batches. The delay is a batching
 // window, not a durability window — a longer delay only trades Hyperdrive
 // round trips against how long the archive lags the room.
@@ -49,9 +53,8 @@ const encodeChatMessage = S.encodeSync(ChatMessage);
 // ChatService resolved from the session cookie on upgrade.
 type Attachment = {
   socketId: string;
-  userId: string;
+  userId: UserId;
   userName: string;
-  roomId: string;
 };
 
 type HistoryCache = {
@@ -59,21 +62,9 @@ type HistoryCache = {
   readonly hasMore: boolean;
 };
 
+// socket messages can be ArrayBuffer or string
 const textFromSocketMessage = (message: string | ArrayBuffer): string =>
   typeof message === "string" ? message : new TextDecoder().decode(message);
-
-// Fails loudly rather than falling back to a default room: silently
-// mis-rooming messages on a routing bug would be much worse than a 500.
-const roomIdFromRequestUrl = (url: string): string => {
-  const segment = new URL(url, "http://chat").pathname
-    .split("/")
-    .filter(Boolean)
-    .at(-1);
-  if (segment === undefined) {
-    throw new Error(`No room id in request URL: ${url}`);
-  }
-  return decodeURIComponent(segment);
-};
 
 export default class Room extends Cloudflare.DurableObject<Room>()(
   "Room",
@@ -84,6 +75,18 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
     );
 
     return Effect.gen(function* () {
+      // The room id is the name this DO was looked up by (`rooms.getByName`
+      // in ChatService). `.name` is only absent for ids minted with
+      // `newUniqueId`, which this app never uses — so its absence is a
+      // wiring bug worth dying on, not a request to limp through.
+      const name = state.id.name;
+      if (name === undefined) {
+        return yield* Effect.die(
+          new Error("Room DO activated without a named id"),
+        );
+      }
+      const roomId = RoomId.make(name);
+
       const sessions = new Map<string, Cloudflare.WebSocket>();
       // Rebuilt from Postgres on the first join after each activation; kept
       // current in memory afterwards so joins don't hit the database.
@@ -95,7 +98,6 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
       yield* state.storage.sql.exec(
         `CREATE TABLE IF NOT EXISTS outbox (
           id TEXT PRIMARY KEY,
-          room_id TEXT NOT NULL,
           message TEXT NOT NULL,
           created_at INTEGER NOT NULL
         )`,
@@ -106,7 +108,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
         if (data) sessions.set(data.socketId, socket);
       }
 
-      const loadHistory = (roomId: string, cursor?: ChatHistoryCursor) =>
+      const loadHistory = (cursor?: ChatHistoryCursor) =>
         Effect.gen(function* () {
           const cached = yield* Ref.get(historyCache);
           if (cursor === undefined && Option.isSome(cached)) {
@@ -139,7 +141,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
             Array.map(archived, (message) => message.id),
           );
           const pending = pendingRows
-            .filter((row) => !archivedIds.has(row.id))
+            .filter((row) => !archivedIds.has(MessageId.make(row.id)))
             .map((row) =>
               decodeChatMessage(
                 JSON.parse(row.message) as PersistedChatMessage,
@@ -170,10 +172,9 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
         Effect.flatMap(
           state.storage.sql.exec<{
             id: string;
-            room_id: string;
             message: string;
           }>(
-            "SELECT id, room_id, message FROM outbox ORDER BY created_at, id LIMIT ?",
+            "SELECT id, message FROM outbox ORDER BY created_at, id LIMIT ?",
             limit,
           ),
           (cursor) => cursor.toArray(),
@@ -190,13 +191,12 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
           }
         });
 
-      const enqueueForArchive = (roomId: string, message: ChatMessage) =>
+      const enqueueForArchive = (message: ChatMessage) =>
         Effect.gen(function* () {
           const encoded = encodeChatMessage(message);
           yield* state.storage.sql.exec(
-            "INSERT INTO outbox (id, room_id, message, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO outbox (id, message, created_at) VALUES (?, ?, ?)",
             encoded.id,
-            roomId,
             JSON.stringify(encoded),
             encoded.createdAt,
           );
@@ -206,17 +206,13 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
       const flushOutbox = Effect.gen(function* () {
         const rows = yield* readOutbox(FLUSH_BATCH_SIZE);
         if (!Array.isReadonlyArrayNonEmpty(rows)) return;
-        // A Room DO serves a single room, but the outbox carries room_id
-        // anyway; group rather than assume.
-        const byRoom = new Map<string, PersistedChatMessage[]>();
-        for (const row of rows) {
-          const batch = byRoom.get(row.room_id) ?? [];
-          batch.push(JSON.parse(row.message) as PersistedChatMessage);
-          byRoom.set(row.room_id, batch);
-        }
-        for (const [roomId, batch] of byRoom) {
-          yield* persistence.persistMessages(roomId, batch);
-        }
+        yield* persistence.persistMessages(
+          roomId,
+          Array.map(
+            rows,
+            (row) => JSON.parse(row.message) as PersistedChatMessage,
+          ),
+        );
         yield* state.storage.sql.exec(
           `DELETE FROM outbox WHERE id IN (${rows.map(() => "?").join(", ")})`,
           ...rows.map((row) => row.id),
@@ -231,61 +227,13 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
           concurrency: BROADCAST_CONCURRENCY,
         });
 
-      return {
-        fetch: Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          const roomId = roomIdFromRequestUrl(request.url);
-          // Identity is stamped on the request by ChatService after cookie
-          // validation; a request without it never went through the gate.
-          const userId = request.headers[USER_ID_HEADER];
-          const encodedUserName = request.headers[USER_NAME_HEADER];
-          if (userId === undefined || encodedUserName === undefined) {
-            return HttpServerResponse.text("Unauthorized", { status: 401 });
-          }
-          const [response, socket] = yield* Cloudflare.upgrade();
-          const socketId = crypto.randomUUID();
-
-          socket.serializeAttachment({
-            socketId,
-            userId,
-            userName: decodeURIComponent(encodedUserName),
-            roomId,
-          } satisfies Attachment);
-          sessions.set(socketId, socket);
-
-          return response;
-        }),
-        webSocketMessage: Effect.fn(function* (
-          socket: Cloudflare.WebSocket,
-          message: string | ArrayBuffer,
-        ) {
-          const attachment = socket.deserializeAttachment<Attachment>();
-          if (!attachment) return;
-
-          const maybeFrame = decodeClientFrame(textFromSocketMessage(message));
-          if (Option.isNone(maybeFrame)) return;
-          const frame = maybeFrame.value;
-
-          if (frame._tag === "GetHistory") {
-            const { messages, hasMore } = yield* loadHistory(attachment.roomId);
-            yield* socket.send(
-              encodeServerFrame({ _tag: "History", messages, hasMore }),
-            );
-            return;
-          }
-
-          if (frame._tag === "GetOlderHistory") {
-            const { messages, hasMore } = yield* loadHistory(
-              attachment.roomId,
-              frame.cursor,
-            );
-            yield* socket.send(
-              encodeServerFrame({ _tag: "OlderHistory", messages, hasMore }),
-            );
-            return;
-          }
-
-          const body = frame.body.trim();
+      const postMessage = (
+        socket: Cloudflare.WebSocket,
+        attachment: Attachment,
+        rawBody: string,
+      ) =>
+        Effect.gen(function* () {
+          const body = rawBody.trim();
           if (String_.isEmpty(body)) {
             return;
           }
@@ -301,7 +249,7 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
           }
 
           const chatMessage: ChatMessage = {
-            id: crypto.randomUUID(),
+            id: MessageId.make(crypto.randomUUID()),
             senderId: attachment.userId,
             senderName: attachment.userName,
             body,
@@ -312,11 +260,68 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
           // runs same-thread against DO SQLite so it can't fail independently
           // of the DO itself. Only after it succeeds does anyone — including
           // the sender and the history cache — see the message.
-          yield* enqueueForArchive(attachment.roomId, chatMessage);
+          yield* enqueueForArchive(chatMessage);
           yield* broadcast(
             encodeServerFrame({ _tag: "Posted", message: chatMessage }),
           );
           yield* appendToHistory(chatMessage);
+        });
+
+      return {
+        fetch: Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          // Identity is stamped on the request by ChatService after cookie
+          // validation; a request without it never went through the gate.
+          const userId = request.headers[USER_ID_HEADER];
+          const encodedUserName = request.headers[USER_NAME_HEADER];
+          if (userId === undefined || encodedUserName === undefined) {
+            return HttpServerResponse.text("Unauthorized", { status: 401 });
+          }
+          const [response, socket] = yield* Cloudflare.upgrade();
+          const socketId = crypto.randomUUID();
+
+          socket.serializeAttachment({
+            socketId,
+            userId: UserId.make(userId),
+            userName: decodeURIComponent(encodedUserName),
+          } satisfies Attachment);
+          sessions.set(socketId, socket);
+
+          return response;
+        }),
+        webSocketMessage: Effect.fn(function* (
+          socket: Cloudflare.WebSocket,
+          message: string | ArrayBuffer,
+        ) {
+          const attachment = socket.deserializeAttachment<Attachment>();
+          if (!attachment) return;
+
+          const maybeFrame = decodeClientFrame(textFromSocketMessage(message));
+          if (Option.isNone(maybeFrame)) return;
+
+          yield* M.value(maybeFrame.value).pipe(
+            M.tagsExhaustive({
+              GetHistory: () =>
+                Effect.gen(function* () {
+                  const { messages, hasMore } = yield* loadHistory();
+                  yield* socket.send(
+                    encodeServerFrame({ _tag: "History", messages, hasMore }),
+                  );
+                }),
+              GetOlderHistory: ({ cursor }) =>
+                Effect.gen(function* () {
+                  const { messages, hasMore } = yield* loadHistory(cursor);
+                  yield* socket.send(
+                    encodeServerFrame({
+                      _tag: "OlderHistory",
+                      messages,
+                      hasMore,
+                    }),
+                  );
+                }),
+              Post: ({ body }) => postMessage(socket, attachment, body),
+            }),
+          );
         }),
         alarm: () =>
           flushOutbox.pipe(

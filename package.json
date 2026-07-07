@@ -15,8 +15,8 @@
     "destroy": "alchemy destroy",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "lint": "oxlint .",
-    "lint:fix": "oxlint --fix .",
+    "lint": "oxlint --disable-nested-config .",
+    "lint:fix": "oxlint --disable-nested-config --fix .",
     "test": "bun test test/integ.test.ts && bun run --cwd frontend test"
   },
   "dependencies": {

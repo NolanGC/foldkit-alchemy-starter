@@ -11,6 +11,7 @@
   },
   "ignorePatterns": [
     ".alchemy/**",
+    "repos/**",
     "dist/**",
     "frontend/dist/**",
     "node_modules/**",

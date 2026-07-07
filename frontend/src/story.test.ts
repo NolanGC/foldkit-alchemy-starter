@@ -1,3 +1,4 @@
+import { MessageId, UserId } from "@foldkit/backend";
 import { DateTime, Option } from "effect";
 import { Story } from "foldkit";
 import { type Url } from "foldkit/url";
@@ -11,7 +12,7 @@ const createdAt = DateTime.makeUnsafe(0);
 const localZone = DateTime.zoneMakeLocal();
 
 const session = {
-  userId: "user-1",
+  userId: UserId.make("user-1"),
   email: "ada@example.com",
   name: "Ada",
 };
@@ -26,16 +27,16 @@ const asLoggedIn = (model: Model): Extract<Model, { _tag: "LoggedIn" }> => {
 };
 
 const helloMessage = {
-  id: "message-1",
-  senderId: "sender-1",
+  id: MessageId.make("00000000-0000-4000-8000-000000000001"),
+  senderId: UserId.make("sender-1"),
   senderName: "Sender One",
   body: "hello",
   createdAt,
 };
 
 const followUpMessage = {
-  id: "message-2",
-  senderId: "sender-2",
+  id: MessageId.make("00000000-0000-4000-8000-000000000002"),
+  senderId: UserId.make("sender-2"),
   senderName: "Sender Two",
   body: "hi back",
   createdAt,

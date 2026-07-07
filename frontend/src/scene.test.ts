@@ -1,3 +1,4 @@
+import { MessageId, UserId } from "@foldkit/backend";
 import { DateTime } from "effect";
 import { Scene } from "foldkit";
 import { describe, test } from "vitest";
@@ -11,8 +12,8 @@ import { ChatRoute, HomeRoute, LoginRoute, NotFoundRoute } from "./route";
 const createdAt = DateTime.makeUnsafe(0);
 
 const helloMessage = {
-  id: "message-1",
-  senderId: "ada00000-0000-0000-0000-000000000000",
+  id: MessageId.make("00000000-0000-4000-8000-000000000001"),
+  senderId: UserId.make("ada00000-0000-0000-0000-000000000000"),
   senderName: "Ada",
   body: "hello from ada",
   createdAt,
@@ -21,7 +22,11 @@ const helloMessage = {
 const connectedModel: Model = {
   _tag: "LoggedIn",
   route: ChatRoute({ roomId: "general" }),
-  session: { userId: "user-ada", email: "ada@example.com", name: "Ada" },
+  session: {
+    userId: UserId.make("user-ada"),
+    email: "ada@example.com",
+    name: "Ada",
+  },
   rooms: RoomsLoaded({ roomIds: ["general", "random", "feature-requests"] }),
   chatPage: {
     ...Chat.init("general"),

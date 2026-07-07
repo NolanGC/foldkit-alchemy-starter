@@ -7,7 +7,11 @@ import { pipe } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
-import type { ChatHistoryCursor, ChatMessage } from "./ChatProtocol.ts";
+import {
+  RoomId,
+  type ChatHistoryCursor,
+  type ChatMessage,
+} from "./ChatProtocol.ts";
 import { Hyperdrive } from "./Db.ts";
 import { ChatMessages, Rooms, User } from "./schema.ts";
 
@@ -23,18 +27,18 @@ export type PersistedChatHistoryPage = {
 
 type ChatPersistenceServiceApi = {
   persistMessages: (
-    roomId: string,
+    roomId: RoomId,
     messages: ReadonlyArray<PersistedChatMessage>,
   ) => Effect.Effect<void>;
   // NOTE: `cursor` is a plain optional parameter rather than an `Option`
   // because arguments cross the worker RPC boundary via structured clone,
   // which `Option` class instances don't survive.
   getRoomHistory: (
-    roomId: string,
+    roomId: RoomId,
     limit: number,
     cursor?: ChatHistoryCursor,
   ) => Effect.Effect<PersistedChatHistoryPage>;
-  listRooms: () => Effect.Effect<ReadonlyArray<string>>;
+  listRooms: () => Effect.Effect<ReadonlyArray<RoomId>>;
 };
 
 type HistoryRow = {
@@ -70,7 +74,7 @@ export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersis
       fetch: Effect.succeed(HttpServerResponse.text("ok")),
 
       persistMessages: (
-        roomId: string,
+        roomId: RoomId,
         messages: ReadonlyArray<PersistedChatMessage>,
       ) =>
         Effect.gen(function* () {
@@ -93,7 +97,7 @@ export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersis
         }),
 
       getRoomHistory: (
-        roomId: string,
+        roomId: RoomId,
         limit: number,
         cursor?: ChatHistoryCursor,
       ) =>
@@ -144,7 +148,7 @@ export default class ChatPersistenceService extends Cloudflare.Worker<ChatPersis
       listRooms: () =>
         Effect.gen(function* () {
           const rows = yield* db.select({ id: Rooms.id }).from(Rooms);
-          return Array.map(rows, (row) => row.id);
+          return Array.map(rows, (row) => RoomId.make(row.id));
         }),
     };
     // `Layer.fresh` for the same reason as in ChatService.ts: the layer

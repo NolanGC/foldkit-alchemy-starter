@@ -1,4 +1,5 @@
 import type { RuntimeContext } from "alchemy";
+import { Stage } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Array from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -20,15 +21,43 @@ import {
   type AuthUser,
 } from "./Auth.ts";
 import ChatPersistenceService from "./ChatPersistenceService.ts";
-import { USER_ID_HEADER, USER_NAME_HEADER } from "./ChatProtocol.ts";
+import { RoomId, USER_ID_HEADER, USER_NAME_HEADER } from "./ChatProtocol.ts";
 import Room from "./DurableObject.ts";
 
-export default class ChatService extends Cloudflare.Worker<ChatService>()(
-  "ChatService",
-  {
-    main: import.meta.url,
-    dev: { port: 1339, strictPort: true },
-  },
+// Declared as a bare Tag, with `.make()` attaching props + runtime below,
+// so the name can be computed from `Stage` — `precreate` reads a directly
+// literal `name` field raw (before Input/Output resolution runs), so a
+// Stage-derived name only resolves correctly as the *whole* props Effect
+// that `.make()` accepts, not as an Effect embedded in one field of a
+// plain object.
+export class ChatService extends Cloudflare.Worker<
+  ChatService,
+  Cloudflare.WorkerShape
+>()("ChatService") {}
+
+export default ChatService.make(
+  Effect.gen(function* () {
+    // This whole module (props *and* impl) is bundled as the deployed
+    // worker's own script (`main: import.meta.url` below), so this
+    // generator body executes a second time inside the actual Workers
+    // runtime on cold start — where `Stage` doesn't exist (it's a
+    // CLI/plan-time-only service). Guard it the same way alchemy's own
+    // binding services do: skip the plan-only lookup once deployed, since
+    // a deployed worker never needs its own `name` at runtime, only at
+    // precreate/reconcile time on the CLI side.
+    const stage = globalThis.__ALCHEMY_RUNTIME__ ? "" : yield* Stage;
+    return {
+      // Deterministic (stage-only, no random suffix) so alchemy.run.ts's
+      // FRONTEND_ORIGIN binding and the Website build's
+      // VITE_CHAT_SERVICE_URL can both be computed as plain strings before
+      // either worker deploys — no circular dependency on each other's
+      // Output. Sanitized the same way as in alchemy.run.ts so both sides
+      // derive the identical DNS-safe name.
+      name: `chat-${stage.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`,
+      main: import.meta.url,
+      dev: { port: 1339, strictPort: true },
+    };
+  }),
   Effect.gen(function* () {
     const rooms = yield* Room;
     const persistence = yield* Cloudflare.Workers.bindWorker(
@@ -132,7 +161,7 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
               if (Option.isNone(maybeUser)) return unauthorized;
               const user = maybeUser.value;
               const { roomId } = yield* HttpRouter.schemaPathParams(
-                S.Struct({ roomId: S.String }),
+                S.Struct({ roomId: RoomId }),
               ).pipe(Effect.orDie);
               const knownRooms = yield* persistence.listRooms();
               if (!Array.contains(knownRooms, roomId)) {
@@ -167,4 +196,4 @@ export default class ChatService extends Cloudflare.Worker<ChatService>()(
       ),
     ),
   ),
-) {}
+);
