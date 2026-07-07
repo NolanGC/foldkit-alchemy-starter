@@ -716,11 +716,7 @@ const historyView = (
       h.div(
         [
           h.Class(
-            `mx-auto flex min-h-full w-full max-w-3xl flex-col ${
-              history._tag === "HistoryLoading"
-                ? "justify-start"
-                : "justify-end"
-            }`,
+            "mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end",
           ),
         ],
         [
@@ -743,6 +739,16 @@ const SKELETON_ROWS: ReadonlyArray<string> = [
   "w-52",
   "w-32",
   "w-36",
+  "w-44",
+  "w-24",
+  "w-56",
+  "w-32",
+  "w-40",
+  "w-28",
+  "w-48",
+  "w-36",
+  "w-44",
+  "w-32",
 ];
 
 const historySkeletonView = (): Html => {

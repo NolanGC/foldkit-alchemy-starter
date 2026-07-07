@@ -483,32 +483,53 @@ const navigationView = (model: LoggedIn): Html => {
   return h.nav(
     [h.Class("border-b border-neutral-900")],
     [
-      h.ul(
-        [h.Class("mx-auto flex max-w-5xl items-center gap-2 px-4 py-3")],
+      h.div(
         [
-          h.li(
-            [h.Class("mr-4 text-sm font-bold uppercase text-neutral-400")],
+          h.Class(
+            "mx-auto flex max-w-5xl items-center gap-2 px-3 py-3 sm:px-4",
+          ),
+        ],
+        [
+          h.div(
+            [
+              h.Class(
+                "mr-2 shrink-0 text-sm font-bold uppercase text-neutral-400 sm:mr-4",
+              ),
+            ],
             [h.a([h.Href(homeRouter())], ["Foldkit Chat"])],
           ),
-          ...Array.map(roomIds, (roomId) =>
-            h.li(
-              [],
-              [
-                h.a(
-                  [
-                    h.Href(chatRouter({ roomId })),
-                    h.Class(linkClassName(isActiveRoom(model.route, roomId))),
-                  ],
-                  [`#${roomId}`],
-                ),
-              ],
+          // Independently scrollable so the tab row never squishes the
+          // brand or the sign-out control on narrow screens.
+          h.ul(
+            [
+              h.Class(
+                "flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+              ),
+            ],
+            Array.map(roomIds, (roomId) =>
+              h.li(
+                [],
+                [
+                  h.a(
+                    [
+                      h.Href(chatRouter({ roomId })),
+                      h.Class(linkClassName(isActiveRoom(model.route, roomId))),
+                    ],
+                    [`#${roomId}`],
+                  ),
+                ],
+              ),
             ),
           ),
-          h.li(
-            [h.Class("ml-auto flex items-center gap-3")],
+          h.div(
+            [
+              h.Class(
+                "ml-2 flex shrink-0 items-center gap-2 sm:ml-auto sm:gap-3",
+              ),
+            ],
             [
               h.span(
-                [h.Class("text-sm text-neutral-400")],
+                [h.Class("hidden text-sm text-neutral-400 sm:inline")],
                 [model.session.name],
               ),
               h.button(
@@ -516,7 +537,7 @@ const navigationView = (model: LoggedIn): Html => {
                   h.Type("button"),
                   h.OnClick(ClickedSignOut()),
                   h.Class(
-                    "border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-300 hover:bg-neutral-800",
+                    "border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm font-medium text-neutral-300 hover:bg-neutral-800 sm:px-3",
                   ),
                 ],
                 ["Sign out"],
