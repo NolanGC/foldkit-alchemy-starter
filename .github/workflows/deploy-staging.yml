@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
 
+# Every push to main deploys the same "staging" stage against shared remote
+# state. Overlapping deploys race on Durable Object class migrations (and
+# other worker metadata) and can leave the worker unable to bind its own
+# classes. Queue instead of cancel: killing a run mid-deploy is exactly how
+# resources get stranded.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
