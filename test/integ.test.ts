@@ -143,9 +143,28 @@ const withChatSession = <T>(
 
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener("open", () => resolve());
-      socket.addEventListener("error", () =>
-        reject(new Error("Failed to open chat socket")),
-      );
+      // A refused upgrade only surfaces as an opaque error event, so on
+      // failure replay the same gates over plain HTTP with the same cookie
+      // to learn WHICH one fired (session? room list?). If both pass, the
+      // failure is past the gates — inside the Durable Object fetch.
+      socket.addEventListener("error", (event) => {
+        void (async () => {
+          const message =
+            (event as { message?: string }).message ?? "no error detail";
+          const httpUrl = new URL(socketUrl);
+          httpUrl.protocol = httpUrl.protocol === "wss:" ? "https:" : "http:";
+          const roomsProbe = await fetch(new URL("/api/rooms", httpUrl), {
+            headers: { cookie },
+          })
+            .then(async (r) => `${r.status} ${await r.text()}`)
+            .catch((cause) => `probe failed: ${cause}`);
+          reject(
+            new Error(
+              `Failed to open chat socket (${message}); GET /api/rooms with same cookie → ${roomsProbe}`,
+            ),
+          );
+        })();
+      });
     });
 
     try {
