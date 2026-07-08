@@ -2,9 +2,31 @@ import * as S from "effect/Schema";
 
 export const MAX_CHAT_MESSAGE_BODY_LENGTH = 2000;
 
+// Headers ChatService uses to forward the verified session identity to the
+// Room durable object (which is only reachable through ChatService).
+export const USER_ID_HEADER = "x-chat-user-id";
+export const USER_NAME_HEADER = "x-chat-user-name";
+
+// We prefer to use branded types, nice Effect feature
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const MessageId = S.String.check(S.isPattern(UUID_PATTERN)).pipe(
+  S.brand("MessageId"),
+);
+export type MessageId = typeof MessageId.Type;
+
+// Branded ids: rooms, users, and messages are all strings on the wire, so
+// without brands a swapped argument compiles and mis-routes at runtime.
+export const RoomId = S.NonEmptyString.pipe(S.brand("RoomId"));
+export type RoomId = typeof RoomId.Type;
+
+export const UserId = S.NonEmptyString.pipe(S.brand("UserId"));
+export type UserId = typeof UserId.Type;
+
 export const ChatMessage = S.Struct({
-  id: S.String,
-  senderId: S.String,
+  id: MessageId,
+  senderId: UserId,
+  senderName: S.String,
   body: S.String,
   createdAt: S.DateTimeUtcFromMillis,
 });
@@ -12,7 +34,7 @@ export type ChatMessage = typeof ChatMessage.Type;
 
 export const ChatHistoryCursor = S.Struct({
   beforeCreatedAtEpochMillis: S.Number,
-  beforeId: S.String,
+  beforeId: MessageId,
 });
 export type ChatHistoryCursor = typeof ChatHistoryCursor.Type;
 

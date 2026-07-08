@@ -15,8 +15,8 @@
     "destroy": "alchemy destroy",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "lint": "oxlint .",
-    "lint:fix": "oxlint --fix .",
+    "lint": "oxlint --disable-nested-config .",
+    "lint:fix": "oxlint --disable-nested-config --fix .",
     "test": "bun test test/integ.test.ts && bun run --cwd frontend test"
   },
   "dependencies": {
@@ -25,6 +25,7 @@
     "@effect/platform-node": "4.0.0-beta.88",
     "@effect/sql-pg": "4.0.0-beta.88",
     "alchemy": "^2.0.0-beta.59",
+    "better-auth": "^1.6.23",
     "drizzle-orm": "1.0.0-rc.1",
     "effect": "4.0.0-beta.88",
     "pg": "^8.13.0",
@@ -42,5 +43,8 @@
     "@distilled.cloud/cloudflare-runtime": "0.12.0",
     "@distilled.cloud/cloudflare-vite-plugin": "0.12.0",
     "@distilled.cloud/cloudflare-rolldown-plugin": "0.12.0"
+  },
+  "patchedDependencies": {
+    "alchemy@2.0.0-beta.59": "patches/alchemy@2.0.0-beta.59.patch"
   }
 }

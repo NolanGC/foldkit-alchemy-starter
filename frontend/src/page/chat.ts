@@ -34,7 +34,6 @@ import { evo } from "foldkit/struct";
 import { CHAT_SERVICE_URL } from "../config";
 
 const CONNECTION_TIMEOUT_MS = 5000;
-const SENDER_LABEL_LENGTH = 5;
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 
@@ -284,6 +283,8 @@ type UpdateReturn = readonly [
 ];
 const withUpdateReturn = M.withReturnType<UpdateReturn>();
 
+// there exists a window between old room socket teardown, could still be getting frames
+// and new room switch, so we ignore messages from the wrong room
 const whenCurrentRoom =
   (model: Model) =>
   (roomId: string, run: () => UpdateReturn): UpdateReturn =>
@@ -335,7 +336,10 @@ export const update = (model: Model, message: Message): UpdateReturn => {
       ],
 
       UpdatedMessageInput: ({ value }) => [
-        evo(model, { messageInput: () => value, sendError: () => Option.none() }),
+        evo(model, {
+          messageInput: () => value,
+          sendError: () => Option.none(),
+        }),
         [],
       ],
 
@@ -456,40 +460,38 @@ export const managedResources = ManagedResource.make<Model, Message>()(
             attempt: model.reconnectAttempt,
           }),
         acquire: ({ roomId }) =>
-          Effect.callback<ChatSocketValue, ChatSocketAcquireError>(
-            (resume) => {
-              const url = new URL(CHAT_SERVICE_URL);
-              url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-              url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
-              const socket = new WebSocket(url);
+          Effect.callback<ChatSocketValue, ChatSocketAcquireError>((resume) => {
+            const url = new URL(CHAT_SERVICE_URL);
+            url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+            url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
+            const socket = new WebSocket(url);
 
-              const handleOpen = () => {
-                socket.removeEventListener("error", handleError);
-                resume(Effect.succeed({ roomId, socket }));
-              };
+            const handleOpen = () => {
+              socket.removeEventListener("error", handleError);
+              resume(Effect.succeed({ roomId, socket }));
+            };
 
-              const handleError = () => {
-                socket.removeEventListener("open", handleOpen);
-                resume(
-                  Effect.fail(
-                    new ChatSocketAcquireError({
-                      roomId,
-                      message: "Failed to connect to chat",
-                    }),
-                  ),
-                );
-              };
+            const handleError = () => {
+              socket.removeEventListener("open", handleOpen);
+              resume(
+                Effect.fail(
+                  new ChatSocketAcquireError({
+                    roomId,
+                    message: "Failed to connect to chat",
+                  }),
+                ),
+              );
+            };
 
-              socket.addEventListener("open", handleOpen);
-              socket.addEventListener("error", handleError);
+            socket.addEventListener("open", handleOpen);
+            socket.addEventListener("error", handleError);
 
-              return Effect.sync(() => {
-                socket.removeEventListener("open", handleOpen);
-                socket.removeEventListener("error", handleError);
-                socket.close();
-              });
-            },
-          ).pipe(
+            return Effect.sync(() => {
+              socket.removeEventListener("open", handleOpen);
+              socket.removeEventListener("error", handleError);
+              socket.close();
+            });
+          }).pipe(
             Effect.timeout(Duration.millis(CONNECTION_TIMEOUT_MS)),
             Effect.catchTag("TimeoutError", () =>
               Effect.fail(
@@ -685,9 +687,6 @@ const connectionStatusView = (connection: ConnectionState): Html => {
   );
 };
 
-const senderLabel = (senderId: string): string =>
-  `user-${senderId.slice(0, SENDER_LABEL_LENGTH)}`;
-
 const messageTime = (
   createdAt: DateTime.Utc,
   maybeZone: Option.Option<DateTime.TimeZone>,
@@ -715,11 +714,15 @@ const historyView = (
     ],
     [
       h.div(
-        [h.Class("mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end")],
+        [
+          h.Class(
+            "mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end",
+          ),
+        ],
         [
           M.value(history).pipe(
             M.tagsExhaustive({
-              HistoryLoading: () => h.empty,
+              HistoryLoading: () => historySkeletonView(),
               HistoryLoaded: ({ messages, hasMore }) =>
                 messagesView(messages, hasMore, maybeZone),
             }),
@@ -727,6 +730,46 @@ const historyView = (
         ],
       ),
     ],
+  );
+};
+
+const SKELETON_ROWS: ReadonlyArray<string> = [
+  "w-40",
+  "w-28",
+  "w-52",
+  "w-32",
+  "w-36",
+  "w-44",
+  "w-24",
+  "w-56",
+  "w-32",
+  "w-40",
+  "w-28",
+  "w-48",
+  "w-36",
+  "w-44",
+  "w-32",
+];
+
+const historySkeletonView = (): Html => {
+  const h = html<Message>();
+
+  return h.ul(
+    [h.Class("flex animate-pulse flex-col gap-3")],
+    SKELETON_ROWS.map((width, index) =>
+      h.keyed("li")(
+        `skeleton-${index}`,
+        [
+          h.Class(
+            "inline-flex w-fit max-w-2/3 flex-col gap-2 self-start border border-neutral-800/30 bg-neutral-900/30 px-4 py-3",
+          ),
+        ],
+        [
+          h.div([h.Class("h-2.5 w-16 rounded bg-neutral-800/40")], []),
+          h.div([h.Class(`h-3 ${width} rounded bg-neutral-800/40`)], []),
+        ],
+      ),
+    ),
   );
 };
 
@@ -766,7 +809,7 @@ const messagesView = (
                   h.p(
                     [h.Class("text-xs text-neutral-500")],
                     [
-                      `${senderLabel(message.senderId)} · ${messageTime(message.createdAt, maybeZone)}`,
+                      `${message.senderName} · ${messageTime(message.createdAt, maybeZone)}`,
                     ],
                   ),
                   h.p(
