@@ -34,7 +34,7 @@ jobs:
           script: |
             const stage = "${{ steps.stage.outputs.name }}";
             const subdomain = "nolangc";
-            const websiteUrl = `https://website-${stage}.${subdomain}.workers.dev`;
+            const websiteUrl = `https://foldkitchat-${stage}.${subdomain}.workers.dev`;
             const chatUrl = `https://chat-${stage}.${subdomain}.workers.dev`;
             const marker = "<!-- alchemy-preview-comment -->";
             const body = [

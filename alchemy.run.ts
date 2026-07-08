@@ -51,12 +51,12 @@ export default Alchemy.Stack(
       : `https://chat-${dnsSafeStage}.${subdomain}.workers.dev`;
     const websiteUrl = dev
       ? "http://localhost:1337"
-      : `https://website-${dnsSafeStage}.${subdomain}.workers.dev`;
+      : `https://foldkitchat-${dnsSafeStage}.${subdomain}.workers.dev`;
 
     const chat = yield* ChatService;
 
     yield* Cloudflare.Website.Vite("Website", {
-      name: `website-${dnsSafeStage}`,
+      name: `foldkitchat-${dnsSafeStage}`,
       rootDir: path.resolve(import.meta.dirname, "frontend"),
       dev: { port: 1337, strictPort: true },
       assets: {
