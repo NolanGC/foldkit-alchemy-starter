@@ -76,10 +76,34 @@ const chatSocketUrl = (chatUrl: string, roomId: string): string => {
   return url.toString();
 };
 
+// A freshly created Hyperdrive config takes a while to propagate to the
+// edge; until then every DB-backed route 500s even though the worker itself
+// answers (getWhenReady passes). Only warm-up flavored failures — 5xx from
+// sign-up, a refused socket open — are worth retrying; assertion failures
+// and 4xx are real bugs and should surface immediately.
+const isWarmupFailure = (error: unknown): boolean => {
+  const text = String(
+    (error as { cause?: unknown }).cause ?? (error as { message?: unknown }),
+  );
+  return /Sign-up failed \(5\d\d\)|Failed to open chat socket/.test(text);
+};
+
+const retryWhileWarmingUp = <A, E>(effect: Effect.Effect<A, E>) =>
+  effect.pipe(
+    Effect.retry({
+      while: isWarmupFailure,
+      times: 24,
+      schedule: Schedule.spaced("5 seconds"),
+    }),
+  );
+
 // Creates a real user through the auth API and returns the session cookie
 // BetterAuth set, so the websocket handshake below authenticates the same
 // way a browser would.
 const signUpTestUser = (chatUrl: string) =>
+  retryWhileWarmingUp(signUpTestUserOnce(chatUrl));
+
+const signUpTestUserOnce = (chatUrl: string) =>
   Effect.tryPromise(async () => {
     const email = `integ-${crypto.randomUUID()}@example.com`;
     const response = await fetch(new URL("/api/auth/sign-up/email", chatUrl), {
@@ -108,6 +132,18 @@ const signUpTestUser = (chatUrl: string) =>
   });
 
 const withChatSession = <T>(
+  socketUrl: string,
+  cookie: string,
+  session: (
+    socket: WebSocket,
+    nextFrame: () => Promise<ServerFrameType>,
+  ) => Promise<T>,
+) =>
+  // Retrying re-runs the whole session, which is safe: the only failure the
+  // predicate matches happens before the session callback ever runs.
+  retryWhileWarmingUp(withChatSessionOnce(socketUrl, cookie, session));
+
+const withChatSessionOnce = <T>(
   socketUrl: string,
   cookie: string,
   session: (
@@ -255,7 +291,7 @@ test(
       }),
     ).toBe(true);
   }),
-  { timeout: 120_000 },
+  { timeout: 300_000 },
 );
 
 test(
@@ -306,5 +342,5 @@ test(
       expect(replayed.messages.map((message) => message.body)).toContain(body);
     }
   }),
-  { timeout: 120_000 },
+  { timeout: 300_000 },
 );
