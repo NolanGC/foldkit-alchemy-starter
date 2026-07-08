@@ -6,6 +6,7 @@ import * as Test from "alchemy/Test/Bun";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as S from "effect/Schema";
 import {
   ClientFrame,
@@ -20,12 +21,25 @@ const { test, beforeAll, afterAll, deploy, destroy } = Test.make({
     Drizzle.providers(),
     Neon.providers(),
   ),
-  state: Alchemy.localState(),
+  // Remote state in CI: runners are ephemeral, so with local state a failed
+  // teardown strands resources with no record. With Cloudflare-backed state
+  // the next run (all CI runs share the "test" stage, serialized by the
+  // workflow's concurrency group) sees the leftovers and cleans them up.
+  // Locally, keep state on disk so dev runs don't touch the shared record.
+  state: process.env.CI ? Cloudflare.state() : Alchemy.localState(),
 });
 
 const stack = beforeAll(deploy(Stack));
 
-afterAll.skipIf(!process.env.CI)(destroy(Stack));
+// Teardown must not leave paid resources behind, so ride out transient API
+// failures (e.g. Cloudflare's ambiguous code-10000 "Authentication error"
+// blips, which the client deliberately does not auto-retry). Destroy plans
+// from state, so a retry only deletes whatever is still standing.
+afterAll.skipIf(!process.env.CI)(
+  destroy(Stack).pipe(
+    Effect.retry({ times: 3, schedule: Schedule.spaced("10 seconds") }),
+  ),
+);
 
 const { getWhenReady } = Test;
 

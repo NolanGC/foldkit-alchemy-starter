@@ -18,6 +18,12 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    # All test runs share the "test" stage (and now shared remote state), so
+    # they must not deploy/destroy concurrently. Queue instead of cancel:
+    # killing a run mid-deploy is exactly how resources get stranded.
+    concurrency:
+      group: integ-test
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
