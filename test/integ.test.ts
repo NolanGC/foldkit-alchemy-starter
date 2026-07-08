@@ -27,6 +27,12 @@ const { test, beforeAll, afterAll, deploy, destroy } = Test.make({
   // workflow's concurrency group) sees the leftovers and cleans them up.
   // Locally, keep state on disk so dev runs don't touch the shared record.
   state: process.env.CI ? Cloudflare.state() : Alchemy.localState(),
+  // Resource names are deterministic per stage, so anything a past run
+  // stranded (failed teardown, lost local state) collides with the next
+  // create ("A Hyperdrive config with the given name already exists").
+  // Adopt instead of failing: the run takes ownership and the teardown
+  // finally deletes it. Safe because CI serializes runs on this stage.
+  adopt: true,
 });
 
 const stack = beforeAll(deploy(Stack));
