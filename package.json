@@ -43,5 +43,8 @@
     "@distilled.cloud/cloudflare-runtime": "0.12.0",
     "@distilled.cloud/cloudflare-vite-plugin": "0.12.0",
     "@distilled.cloud/cloudflare-rolldown-plugin": "0.12.0"
+  },
+  "patchedDependencies": {
+    "alchemy@2.0.0-beta.59": "patches/alchemy@2.0.0-beta.59.patch"
   }
 }

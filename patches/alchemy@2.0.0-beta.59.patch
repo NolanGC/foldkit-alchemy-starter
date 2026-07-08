@@ -1,0 +1,31 @@
+diff --git a/src/Neon/Branch.ts b/src/Neon/Branch.ts
+index 7976657c32f75f814a5e8b26f0cb2b6f3a1543a2..b6d57e40aa45d975e2f5a548f543b7cf5f40df15 100644
+--- a/src/Neon/Branch.ts
++++ b/src/Neon/Branch.ts
+@@ -275,7 +275,12 @@ export const BranchProvider = () =>
+         );
+       }
+       if (!olds?.project) return undefined;
+-      const projectId = resolveProjectId(olds.project as BranchSource);
++      // Report "nothing to adopt" instead of throwing when the project is
++      // not resolvable from the probe's raw props: a branch whose project
++      // isn't identifiable yet cannot be looked up, and the engine falls
++      // through to a normal create against the resolved project.
++      const projectId = maybeResolveProjectId(olds.project as BranchSource);
++      if (projectId === undefined) return undefined;
+       const name = yield* createBranchName(id, olds.name);
+       const matches = yield* findBranchByName(projectId, name);
+       const match = matches[0];
+@@ -578,6 +583,12 @@ const findBranchByName = (projectId: string, name: string) =>
+   });
+ 
+ const maybeResolveProjectId = (source: BranchSource): string | undefined => {
++  // The engine's adoption probe passes raw plan props as `olds`, where
++  // `project` can still be an unresolved primitive placeholder rather than
++  // a Project object — `"projectId" in <primitive>` throws TypeError.
++  if (typeof source !== "object" || source === null) {
++    return undefined;
++  }
+   if ("projectId" in source && source.projectId) {
+     return source.projectId as unknown as string;
+   }
