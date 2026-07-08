@@ -31,11 +31,10 @@ import ChatPersistenceService, {
 
 const HISTORY_LIMIT = 50;
 const BROADCAST_CONCURRENCY = 32;
-
+// We use a hierarchical system where we first persist messages to DO SQLite,
+// and then flush in batches to Postgres which is designed to be our permanent store.
 // Outbox flush cadence, messages get written to DO SQLite immediately
-// the alarm archives them to Postgres in batches. The delay is a batching
-// window, not a durability window — a longer delay only trades Hyperdrive
-// round trips against how long the archive lags the room.
+// the alarm archives them to Postgres in batches
 const FLUSH_DELAY_MS = 1_000;
 const FLUSH_RETRY_DELAY_MS = 5_000;
 const FLUSH_BATCH_SIZE = 100;
@@ -77,18 +76,18 @@ export default class Room extends Cloudflare.DurableObject<Room>()(
     return Effect.gen(function* () {
       // The room id is the name this DO was looked up by (`rooms.getByName`
       // in ChatService). `.name` is only absent for ids minted with
-      // `newUniqueId`, which this app never uses — so its absence is a
-      // wiring bug worth dying on, not a request to limp through.
+      // `newUniqueId`, which this app never uses
       const name = state.id.name;
       if (name === undefined) {
         return yield* Effect.die(
+          // should not happen?
           new Error("Room DO activated without a named id"),
         );
       }
       const roomId = RoomId.make(name);
 
       const sessions = new Map<string, Cloudflare.WebSocket>();
-      // Rebuilt from Postgres on the first join after each activation; kept
+      // Rebuilt from Postgres on the first join after each activation, kept
       // current in memory afterwards so joins don't hit the database.
       const historyCache = yield* Ref.make(Option.none<HistoryCache>());
 

@@ -7,6 +7,7 @@ export const MAX_CHAT_MESSAGE_BODY_LENGTH = 2000;
 export const USER_ID_HEADER = "x-chat-user-id";
 export const USER_NAME_HEADER = "x-chat-user-name";
 
+// We prefer to use branded types, nice Effect feature
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MessageId = S.String.check(S.isPattern(UUID_PATTERN)).pipe(

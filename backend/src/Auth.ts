@@ -17,7 +17,6 @@ import { UserId } from "./ChatProtocol.ts";
 import { Hyperdrive } from "./Db.ts";
 import { Account, Session, User, Verification } from "./schema.ts";
 
-/** The auth backend (Postgres over Hyperdrive) failed mid-request. */
 export class AuthError extends Data.TaggedError("AuthError")<{
   cause: unknown;
 }> {}
@@ -63,7 +62,7 @@ const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) => {
     basePath: "/api/auth",
     emailAndPassword: {
       enabled: true,
-      // Flip this on once an email sender exists (Cloudflare Email Routing
+      // We can add something here for email verification (Cloudflare Email Routing
       // domain + `Cloudflare.Email.Send`); wire `sendVerificationEmail` in
       // `emailVerification` at the same time.
       requireEmailVerification: false,
@@ -96,6 +95,7 @@ const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) => {
           },
         },
     // OAuth extension point — add providers here later, e.g.
+    // just a config change so should be easy
     // socialProviders: { github: { clientId, clientSecret } }.
   });
 };

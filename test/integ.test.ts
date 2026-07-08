@@ -1,3 +1,35 @@
+// Integration test against REAL infrastructure: deploys the full stack
+// (Neon project/branch + Drizzle migrations, Hyperdrive, BetterAuth secret,
+// three Cloudflare workers) before the tests and destroys it after (CI only).
+//
+// Covers:
+// - Deploy and teardown of the whole stack, including adoption of resources
+//   stranded by earlier failed runs (remote state + `adopt` in CI).
+// - Stack outputs exist (website/chat URLs, Neon branch id, Hyperdrive id).
+// - Auth gating: anonymous /api/rooms → 401; websocket upgrades refused for
+//   anonymous callers, valid-cookie-but-foreign-Origin callers (cross-site
+//   WebSocket hijacking), and unknown rooms with a valid session.
+// - Real BetterAuth email sign-up returning a usable session cookie.
+// - Authenticated /api/rooms returns the seeded rooms.
+// - Chat over a real websocket: history replay, a post echoed back with the
+//   server-derived sender identity (not client-claimed), and persistence —
+//   a second connection's history contains the message.
+//
+// Does NOT cover:
+// - WHICH status a refused upgrade returned (401/403/404 all surface as the
+//   same failed handshake; the on-failure HTTP probe only aids debugging).
+// - Broadcast fan-out to a concurrently connected second client (the two
+//   sessions here are sequential).
+// - History pagination (cursor, hasMore, older pages) — only first-page
+//   replay is exercised.
+// - Sign-in, sign-out, session expiry (only sign-up is exercised).
+// - Message validation/rejection frames (e.g. oversized body).
+// - The Website worker beyond deploying it (no request is made to
+//   websiteUrl), and none of the frontend.
+// - Local dev mode (`alchemy dev`); the test always deploys to the cloud.
+// Note: warm-up retries below deliberately absorb 5xx from sign-up and
+// refused socket opens for up to ~2 minutes after a fresh deploy, so
+// transient flavors of those failures are invisible here by design.
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle";

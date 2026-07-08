@@ -1,3 +1,30 @@
+// Pure update-logic tests (Foldkit Story): messages in, model + commands
+// out. No DOM, no network — commands are asserted and resolved by hand, so
+// nothing here proves a websocket or fetch actually behaves as modeled.
+//
+// Covers:
+// - init: cached session lands LoggedIn + fetches rooms; chat routes capture
+//   the room id; no session redirects chat routes to login.
+// - Room list storage after GotRooms.
+// - Top-level delegation of chat messages into the chat page model.
+// - Chat connect: requests history, fetches the local zone exactly once
+//   (skipped on reconnect when already known).
+// - Sending: trims input, clears it on success, ignores empty submissions.
+// - History: load replaces loading state, older pages prepend, live posts
+//   append; rejected sends surface an error that clears on the next edit.
+// - Room switching resets history/connection; stale socket events from the
+//   previous room are ignored.
+// - Disconnect schedules a reconnect and bumps the attempt counter; a
+//   successful reconnect resets it.
+//
+// Does NOT cover:
+// - Rendering (see scene.test.ts) or real command effects (sockets, HTTP).
+// - The logged-out form flows: sign-in/sign-up input, pending, auth errors,
+//   sign-out.
+// - Navigation/URL-change messages after init.
+// - Reconnect backoff growth beyond the first retry (only delayMs 500 and
+//   attempt 0→1 are asserted).
+// - Requesting older history (only the handling of its result frame).
 import { MessageId, UserId } from "@foldkit/backend";
 import { DateTime, Option } from "effect";
 import { Story } from "foldkit";

@@ -1,3 +1,30 @@
+// View-rendering tests (Foldkit Scene): a model in, semantic queries
+// (roles/labels/text) against the rendered view out. No real browser and no
+// command execution — interactions are limited to what Scene simulates.
+//
+// Covers:
+// - Logged out: the login route renders the sign-in form; the landing page
+//   links to sign-in.
+// - Logged in: nav shows the user's name and a sign-out button; the home
+//   route renders the landing page.
+// - Chat room rendering: heading, empty state, connection status, room
+//   links, labeled composer with Send disabled when empty and enabled after
+//   typing; loading history suppresses the empty state; a loaded message's
+//   body renders.
+// - Routing views: a /chat/:roomId route renders that room, an unknown room
+//   renders "Room not found", unknown paths render "Page not found".
+// - A chat connection error renders as role="alert" and disables Send; so
+//   does the rejected-send banner, which clears on the next edit.
+// - Disconnected state shows its status and disables the composer.
+// - A partial history (hasMore) offers the "Load more" button.
+//
+// Does NOT cover:
+// - Click flows: sending a message, signing out, navigating via room links,
+//   clicking "Load more" (typing is the only interaction exercised).
+// - Message metadata rendering (sender label is asserted only via body text;
+//   timestamps/zone formatting untested).
+// - The Connecting state's rendering.
+// - Anything visual: layout, styling, focus management.
 import { MessageId, UserId } from "@foldkit/backend";
 import { DateTime } from "effect";
 import { Scene } from "foldkit";
@@ -182,6 +209,57 @@ describe("view", () => {
       Scene.expect(Scene.role("alert")).toExist(),
       Scene.expect(Scene.text("Connection timeout")).toExist(),
       Scene.expect(Scene.role("button", { name: "Send" })).toBeDisabled(),
+    );
+  });
+
+  test("a rejected send renders an alert that clears on the next edit", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({
+        ...connectedModel,
+        chatPage: {
+          ...connectedModel.chatPage,
+          sendError: Option.some("Too long."),
+        },
+      }),
+      Scene.expect(Scene.role("alert")).toExist(),
+      Scene.expect(Scene.text("Too long.")).toExist(),
+      Scene.type(Scene.label("Message"), "shorter"),
+      Scene.expect(Scene.role("alert")).not.toExist(),
+    );
+  });
+
+  test("a disconnected room shows the status and disables the composer", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({
+        ...connectedModel,
+        chatPage: {
+          ...connectedModel.chatPage,
+          connection: Chat.ConnectionDisconnected(),
+          messageInput: "drafted while offline",
+        },
+      }),
+      Scene.expect(Scene.text("Disconnected")).toExist(),
+      Scene.expect(Scene.label("Message")).toBeDisabled(),
+      Scene.expect(Scene.role("button", { name: "Send" })).toBeDisabled(),
+    );
+  });
+
+  test("a partial history offers to load more", () => {
+    Scene.scene(
+      { update, view },
+      Scene.with({
+        ...connectedModel,
+        chatPage: {
+          ...connectedModel.chatPage,
+          history: Chat.HistoryLoaded({
+            messages: [helloMessage],
+            hasMore: true,
+          }),
+        },
+      }),
+      Scene.expect(Scene.role("button", { name: "Load more" })).toExist(),
     );
   });
 
