@@ -26,10 +26,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .eslintcache
 .cache
 *.tsbuildinfo
-reference_repos/
-
-# Vendored foldkit subtree (reference material for the foldkit skill, not app code)
-repos/foldkit/
+# Vendored reference repos (foldkit, alchemy-effect) — reference material for
+# Claude skills, not app code
+repos/
 
 # IntelliJ based IDEs
 .idea
