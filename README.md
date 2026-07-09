@@ -18,7 +18,7 @@ TODOs:
 Scaffold your own app with the CLI — no need to clone this repo:
 
 ```sh
-bun create foldkit-alchemy-app@latest my-app
+bun create foldkit-alchemy-app@latest
 ```
 
 It'll prompt you through the example app (live chat or a CRUD todo list), a
