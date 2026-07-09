@@ -1,7 +1,8 @@
 # WIP - Foldkit+Alchemy Starter
 
 A small full-stack starter (live chat app with channels) that combines Foldkit and Alchemy for building
-apps end-to-end with Effect, running on Cloudflare with Neon Postgres via Hyperdrive.
+apps end-to-end with Effect, running on Cloudflare with Postgres (Neon or
+PlanetScale) via Hyperdrive.
 
 This repo is a work in progress. The goal is to build a strongly opinionated stack
 designed to dramatically improve the effectiveness of building apps with agents. Please contribute!
@@ -21,7 +22,15 @@ bun dev
 ```
 
 That's it — `bun dev` prompts a Cloudflare login (OAuth) on first run and provisions
-everything else (Neon branch, Hyperdrive, workers) automatically.
+everything else (Postgres branch, Hyperdrive, workers) automatically.
+
+Postgres is provided through the `Postgres` service in `backend/src/Db.ts`, with
+two interchangeable layers: `NeonPostgresLive` (free tier) and
+`PlanetscalePostgresLive`. Point the `PostgresLive` export in
+`backend/src/Db.ts` at either layer to switch providers — nothing else
+changes. PlanetScale needs
+`PLANETSCALE_API_TOKEN_ID`, `PLANETSCALE_API_TOKEN`, and
+`PLANETSCALE_ORGANIZATION` in `.env` instead of `NEON_API_KEY`.
 
 ## Structure
 
