@@ -14,12 +14,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 // Relevant: https://v2.alchemy.run/cloudflare/compute/hibernatable-websockets/#_top
 
-import {
-  AuthError,
-  BetterAuth,
-  BetterAuthPg,
-  type AuthUser,
-} from "./Auth.ts";
+import { AuthError, BetterAuth, BetterAuthPg, type AuthUser } from "./Auth.ts";
 import ChatPersistenceService from "./ChatPersistenceService.ts";
 import { RoomId, USER_ID_HEADER, USER_NAME_HEADER } from "./ChatProtocol.ts";
 import Room from "./DurableObject.ts";

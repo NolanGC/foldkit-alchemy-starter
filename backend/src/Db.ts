@@ -82,7 +82,7 @@ export const PlanetscalePostgresLive = Layer.effect(
  * The active database provider — swap between `NeonPostgresLive` and
  * `PlanetscalePostgresLive` here; nothing else changes.
  */
-export const PostgresLive = PlanetscalePostgresLive;
+export const PostgresLive = NeonPostgresLive;
 
 export const Hyperdrive = Effect.gen(function* () {
   const { origin } = yield* Postgres;
