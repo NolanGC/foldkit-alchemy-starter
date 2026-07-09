@@ -9,9 +9,9 @@ designed to dramatically improve the effectiveness of building apps with agents.
 
 TODOs:
 
-- Opentelemetry integration with Axiom and instrumentation inside Effect services
 - Documentation for agents
 - Payments scaffolding
+- Opentelemetry integration with Axiom and instrumentation inside Effect services
 
 ## Quick start
 
