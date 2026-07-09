@@ -23,14 +23,7 @@ bun create foldkit-alchemy-app@latest
 
 It'll prompt you through the example app (live chat or a CRUD todo list), a
 Postgres provider (Neon or PlanetScale), whether to include BetterAuth, and
-where Alchemy should store deployment state (local by default). Then:
-
-```sh
-cd my-app
-cp .env.example .env   # then fill in the values
-bun dev
-```
-
+where Alchemy should store deployment state (local by default).
 ## Working on this repo
 
 The sections below are for developing on the starter itself (this repo),
@@ -44,7 +37,7 @@ echo "NEON_API_KEY=..." > .env
 bun dev
 ```
 
-That's it — `bun dev` prompts a Cloudflare login (OAuth) on first run and provisions
+`bun dev` prompts a Cloudflare login (OAuth) on first run and provisions
 everything else (Postgres branch, Hyperdrive, workers) automatically.
 
 Postgres is provided through the `Postgres` service in `backend/src/Db.ts`, with
