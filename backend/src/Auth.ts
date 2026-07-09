@@ -129,7 +129,7 @@ export class BetterAuth extends Context.Service<
   }
 >()("BetterAuth") {}
 
-export const BetterAuthNeon = Layer.effect(
+export const BetterAuthPg = Layer.effect(
   BetterAuth,
   Effect.gen(function* () {
     const conn = yield* Cloudflare.Hyperdrive.Connect(Hyperdrive);

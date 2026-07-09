@@ -17,7 +17,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import {
   AuthError,
   BetterAuth,
-  BetterAuthNeon,
+  BetterAuthPg,
   type AuthUser,
 } from "./Auth.ts";
 import ChatPersistenceService from "./ChatPersistenceService.ts";
@@ -191,7 +191,7 @@ export default ChatService.make(
     // second worker to build it reuses the first worker's build and the
     // Hyperdrive binding lands on only one of them.
     Effect.provide(
-      BetterAuthNeon.pipe(
+      BetterAuthPg.pipe(
         Layer.provide(Layer.fresh(Cloudflare.Hyperdrive.ConnectBinding)),
       ),
     ),

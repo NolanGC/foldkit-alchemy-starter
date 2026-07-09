@@ -2,12 +2,13 @@ import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle";
 import * as Neon from "alchemy/Neon";
+import * as Planetscale from "alchemy/Planetscale";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Path } from "effect/Path";
 
 import ChatServiceLive, { ChatService } from "./backend/src/ChatService.ts";
-import { Hyperdrive, NeonDb } from "./backend/src/Db.ts";
+import { Hyperdrive, Postgres, PostgresLive } from "./backend/src/Db.ts";
 
 export default Alchemy.Stack(
   "CloudflareNeonDrizzleExample",
@@ -16,11 +17,12 @@ export default Alchemy.Stack(
       Cloudflare.providers(),
       Drizzle.providers(),
       Neon.providers(),
+      Planetscale.providers(),
     ),
     state: Cloudflare.state(),
   },
   Effect.gen(function* () {
-    const { branch } = yield* NeonDb;
+    const { branchId } = yield* Postgres;
     const hd = yield* Hyperdrive;
     const path = yield* Path;
     const stage = yield* Alchemy.Stage;
@@ -76,8 +78,8 @@ export default Alchemy.Stack(
     return {
       chatUrl,
       websiteUrl,
-      branchId: branch.branchId,
+      branchId,
       hyperdriveId: hd.hyperdriveId,
     };
-  }).pipe(Effect.provide(ChatServiceLive)),
+  }).pipe(Effect.provide(ChatServiceLive), Effect.provide(PostgresLive)),
 );

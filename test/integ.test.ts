@@ -34,6 +34,7 @@ import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle";
 import * as Neon from "alchemy/Neon";
+import * as Planetscale from "alchemy/Planetscale";
 import * as Test from "alchemy/Test/Bun";
 import { expect } from "bun:test";
 import * as Effect from "effect/Effect";
@@ -52,6 +53,7 @@ const { test, beforeAll, afterAll, deploy, destroy } = Test.make({
     Cloudflare.providers(),
     Drizzle.providers(),
     Neon.providers(),
+    Planetscale.providers(),
   ),
   // Remote state in CI: runners are ephemeral, so with local state a failed
   // teardown strands resources with no record. With Cloudflare-backed state
