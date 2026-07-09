@@ -29,7 +29,7 @@ const rootFiles = [
   "AGENTS.md",
 ];
 
-const rootDirs = ["backend", "frontend", "migrations", "patches", "scripts"];
+const rootDirs = ["backend", "frontend", "migrations", "patches"];
 
 // Build artifacts and local state that must never ship inside a template.
 const excludedNames = new Set([

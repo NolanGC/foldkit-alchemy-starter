@@ -297,9 +297,8 @@ alternative (state then lives in \`.alchemy/\`, gitignored).`,
 };
 
 // Chat-app files the todo overlay replaces or has no use for. migrations/
-// and scripts/ go too: the todo schema regenerates its migrations on first
-// deploy, and generate-migration.ts requires an existing snapshot. test/
-// holds the chat integration test; the overlay ships its own.
+// goes too: the todo schema regenerates its migrations on first deploy.
+// test/ holds the chat integration test; the overlay ships its own.
 const todoDeletions = [
   "backend/src/ChatService.ts",
   "backend/src/ChatProtocol.ts",
@@ -307,7 +306,6 @@ const todoDeletions = [
   "backend/src/DurableObject.ts",
   "frontend/src/page/chat.ts",
   "migrations",
-  "scripts",
   "test",
 ];
 
