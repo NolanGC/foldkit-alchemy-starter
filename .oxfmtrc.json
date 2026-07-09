@@ -22,6 +22,8 @@
     "**/*.md",
     "**/.vendor/**",
     "**/package.json",
+    "packages/create-foldkit-alchemy-app/templates/**",
+    "packages/create-foldkit-alchemy-app/dist/**",
     "**/*.tsbuildinfo"
   ]
 }

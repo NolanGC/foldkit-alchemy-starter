@@ -5,7 +5,7 @@ export default defineConfig({
     environment: "happy-dom",
     setupFiles: ["./src/vitest-setup.ts"],
     env: {
-      VITE_CHAT_SERVICE_URL: "http://localhost:8788",
+      VITE_API_URL: "http://localhost:8788",
     },
     server: {
       deps: {

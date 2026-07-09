@@ -1,4 +1,3 @@
-import { Input } from "@foldkit/ui";
 import { Array, Cause, Effect, Match as M, Option, Schema as S } from "effect";
 import { Command, ManagedResource, Runtime, Subscription } from "foldkit";
 import { html, type Document, type Html } from "foldkit/html";
@@ -13,19 +12,15 @@ import {
   ClearSession,
   CompletedSessionPersistence,
   CompletedSignOut,
-  FailedAuth,
   FailedCheckSession,
   GotSession,
   SaveSession,
   Session,
-  SignIn,
   SignOut,
-  SignUp,
-  SucceededAuth,
   readStoredSession,
 } from "./auth";
-import { CHAT_SERVICE_URL } from "./config";
-import { Chat } from "./page";
+import { API_URL } from "./config";
+import { Chat, Login } from "./page";
 import {
   AppRoute,
   chatRouter,
@@ -50,26 +45,13 @@ export const RoomsLoaded = ts("RoomsLoaded", {
 const RoomsState = S.Union([RoomsLoading, RoomsFailed, RoomsLoaded]);
 type RoomsState = typeof RoomsState.Type;
 
-export const SignInMode = ts("SignInMode");
-export const SignUpMode = ts("SignUpMode");
-const AuthMode = S.Union([SignInMode, SignUpMode]);
-type AuthMode = typeof AuthMode.Type;
-
 // Top-level union: chat state only exists when logged in. Both variants
 // carry a `chatPage` because `Subscription.lift` needs a total projection;
 // the LoggedOut copy stays disconnected so its subscriptions are inert.
+// The sign-in/sign-up form itself is the shared `Login` page submodel.
 export const LoggedOut = ts("LoggedOut", {
   route: AppRoute,
-  mode: AuthMode,
-  name: S.String,
-  email: S.String,
-  password: S.String,
-  pending: S.Boolean,
-  error: S.Option(S.String),
-  // True while the boot-time `CheckSession` is still in flight and the
-  // localStorage cache was empty — the login form waits so a valid cookie
-  // doesn't flash the form before logging in.
-  checkingSession: S.Boolean,
+  loginPage: Login.Model,
   chatPage: Chat.Model,
 });
 export type LoggedOut = typeof LoggedOut.Type;
@@ -100,13 +82,9 @@ export const FailedFetchRooms = m("FailedFetchRooms", { error: S.String });
 export const GotChatMessage = m("GotChatMessage", {
   message: Chat.Message,
 });
-export const UpdatedAuthName = m("UpdatedAuthName", { value: S.String });
-export const UpdatedAuthEmail = m("UpdatedAuthEmail", { value: S.String });
-export const UpdatedAuthPassword = m("UpdatedAuthPassword", {
-  value: S.String,
+export const GotLoginMessage = m("GotLoginMessage", {
+  message: Login.Message,
 });
-export const SwitchedAuthMode = m("SwitchedAuthMode", { mode: AuthMode });
-export const SubmittedAuthForm = m("SubmittedAuthForm");
 export const ClickedSignOut = m("ClickedSignOut");
 
 export const Message = S.Union([
@@ -117,16 +95,10 @@ export const Message = S.Union([
   GotRooms,
   FailedFetchRooms,
   GotChatMessage,
-  UpdatedAuthName,
-  UpdatedAuthEmail,
-  UpdatedAuthPassword,
-  SwitchedAuthMode,
-  SubmittedAuthForm,
+  GotLoginMessage,
   ClickedSignOut,
   GotSession,
   FailedCheckSession,
-  SucceededAuth,
-  FailedAuth,
   CompletedSignOut,
   CompletedSessionPersistence,
 ]);
@@ -154,13 +126,7 @@ const routeRoomId = (route: AppRoute): string =>
 const initLoggedOut = (route: AppRoute, checkingSession: boolean): LoggedOut =>
   LoggedOut({
     route,
-    mode: SignInMode(),
-    name: "",
-    email: "",
-    password: "",
-    pending: false,
-    error: Option.none(),
-    checkingSession,
+    loginPage: Login.init(checkingSession),
     chatPage: Chat.init(DEFAULT_ROOM_ID),
   });
 
@@ -247,7 +213,7 @@ const FetchRooms = Command.define(
   FailedFetchRooms,
 )(
   Effect.tryPromise(async () => {
-    const response = await fetch(new URL("/api/rooms", CHAT_SERVICE_URL), {
+    const response = await fetch(new URL("/api/rooms", API_URL), {
       credentials: "include",
     });
     if (!response.ok) {
@@ -340,7 +306,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
             LoggedOut: (loggedOut) =>
               Option.match(maybeSession, {
                 onNone: (): UpdateReturn => [
-                  evo(loggedOut, { checkingSession: () => false }),
+                  evo(loggedOut, {
+                    loginPage: (loginPage) =>
+                      Login.setCheckingSession(loginPage, false),
+                  }),
                   [],
                 ],
                 onSome: (session) => enterLoggedIn(session),
@@ -361,51 +330,30 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       // put; gated requests will surface real 401s on their own.
       FailedCheckSession: () =>
         model._tag === "LoggedOut"
-          ? [evo(model, { checkingSession: () => false }), []]
-          : [model, []],
-
-      UpdatedAuthName: ({ value }) =>
-        model._tag === "LoggedOut"
-          ? [evo(model, { name: () => value }), []]
-          : [model, []],
-      UpdatedAuthEmail: ({ value }) =>
-        model._tag === "LoggedOut"
-          ? [evo(model, { email: () => value }), []]
-          : [model, []],
-      UpdatedAuthPassword: ({ value }) =>
-        model._tag === "LoggedOut"
-          ? [evo(model, { password: () => value }), []]
-          : [model, []],
-      SwitchedAuthMode: ({ mode }) =>
-        model._tag === "LoggedOut"
-          ? [evo(model, { mode: () => mode, error: () => Option.none() }), []]
-          : [model, []],
-
-      SubmittedAuthForm: () => {
-        if (model._tag !== "LoggedOut" || model.pending) return [model, []];
-        const { mode, name, email, password } = model;
-        return [
-          evo(model, { pending: () => true, error: () => Option.none() }),
-          [
-            mode._tag === "SignInMode"
-              ? SignIn({ email, password })
-              : SignUp({ name, email, password }),
-          ],
-        ];
-      },
-
-      SucceededAuth: ({ session }) => enterLoggedIn(session),
-
-      FailedAuth: ({ error }) =>
-        model._tag === "LoggedOut"
           ? [
               evo(model, {
-                pending: () => false,
-                error: () => Option.some(error),
+                loginPage: (loginPage) =>
+                  Login.setCheckingSession(loginPage, false),
               }),
               [],
             ]
           : [model, []],
+
+      GotLoginMessage: ({ message }) => {
+        // The submodel signals a completed sign-in/up; the transition out
+        // of LoggedOut belongs to the app, so intercept it here.
+        if (message._tag === "SucceededAuth") {
+          return enterLoggedIn(message.session);
+        }
+        if (model._tag !== "LoggedOut") return [model, []];
+        const [loginPage, commands] = Login.update(model.loginPage, message);
+        return [
+          evo(model, { loginPage: () => loginPage }),
+          Command.mapMessages(commands, (message) =>
+            GotLoginMessage({ message }),
+          ),
+        ];
+      },
 
       ClickedSignOut: () => [model, [SignOut()]],
       CompletedSignOut: () => leaveLoggedIn(),
@@ -564,10 +512,10 @@ const loggedOutView = (model: LoggedOut): Document => {
       Chat: () => ({ title: "FoldkitChat", body: landingView(false) }),
       Login: () => ({
         title:
-          model.mode._tag === "SignInMode"
+          model.loginPage.mode._tag === "SignInMode"
             ? "Sign in — FoldkitChat"
             : "Sign up — FoldkitChat",
-        body: authFormView(model),
+        body: loginView(model),
       }),
       NotFound: ({ path }) => ({
         title: "Not Found",
@@ -580,138 +528,15 @@ const loggedOutView = (model: LoggedOut): Document => {
   );
 };
 
-const authFieldClass =
-  "w-full border border-neutral-700 bg-neutral-950 px-4 py-3 text-neutral-100 outline-none placeholder:text-neutral-500 focus-visible:border-neutral-400 focus-visible:ring-1 focus-visible:ring-neutral-400 disabled:opacity-50";
-
-const authFormView = (model: LoggedOut): Html => {
+const loginView = (model: LoggedOut): Html => {
   const h = html<Message>();
-  const isSignIn = model.mode._tag === "SignInMode";
 
-  const field = (options: {
-    id: string;
-    label: string;
-    type: string;
-    value: string;
-    onInput: (value: string) => Message;
-    autocomplete: string;
-  }): Html =>
-    Input.view<Message>({
-      id: options.id,
-      value: options.value,
-      isDisabled: model.pending || model.checkingSession,
-      onInput: options.onInput,
-      toView: (attributes) =>
-        h.div(
-          [h.Class("flex flex-col gap-1")],
-          [
-            h.label(
-              [...attributes.label, h.Class("text-sm text-neutral-400")],
-              [options.label],
-            ),
-            h.input([
-              ...attributes.input,
-              h.Type(options.type),
-              h.Autocomplete(options.autocomplete),
-              h.Class(authFieldClass),
-            ]),
-          ],
-        ),
-    });
-
-  return h.main(
-    [h.Class("min-h-screen bg-neutral-950 px-6 py-24 text-neutral-100")],
-    [
-      h.div(
-        [h.Class("mx-auto max-w-sm")],
-        [
-          h.h1(
-            [h.Class("text-2xl font-bold")],
-            [isSignIn ? "Sign in" : "Create an account"],
-          ),
-          h.form(
-            [
-              h.Class("mt-8 flex flex-col gap-4"),
-              h.OnSubmit(SubmittedAuthForm()),
-            ],
-            [
-              isSignIn
-                ? h.empty
-                : field({
-                    id: "auth-name",
-                    label: "Name",
-                    type: "text",
-                    value: model.name,
-                    onInput: (value) => UpdatedAuthName({ value }),
-                    autocomplete: "name",
-                  }),
-              field({
-                id: "auth-email",
-                label: "Email",
-                type: "email",
-                value: model.email,
-                onInput: (value) => UpdatedAuthEmail({ value }),
-                autocomplete: "email",
-              }),
-              field({
-                id: "auth-password",
-                label: "Password",
-                type: "password",
-                value: model.password,
-                onInput: (value) => UpdatedAuthPassword({ value }),
-                autocomplete: isSignIn ? "current-password" : "new-password",
-              }),
-              Option.match(model.error, {
-                onNone: () => h.empty,
-                onSome: (error) =>
-                  h.p(
-                    [h.Class("text-sm text-red-400"), h.Role("alert")],
-                    [error],
-                  ),
-              }),
-              h.button(
-                [
-                  h.Type("submit"),
-                  h.Disabled(model.pending || model.checkingSession),
-                  h.Class(
-                    "border border-neutral-700 bg-neutral-800 px-4 py-3 font-medium text-neutral-100 hover:bg-neutral-700 disabled:opacity-50",
-                  ),
-                ],
-                [
-                  model.checkingSession
-                    ? "Checking session…"
-                    : model.pending
-                      ? isSignIn
-                        ? "Signing in…"
-                        : "Signing up…"
-                      : isSignIn
-                        ? "Sign in"
-                        : "Sign up",
-                ],
-              ),
-            ],
-          ),
-          h.button(
-            [
-              h.Type("button"),
-              h.OnClick(
-                SwitchedAuthMode({
-                  mode: isSignIn ? SignUpMode() : SignInMode(),
-                }),
-              ),
-              h.Class(
-                "mt-6 text-sm text-neutral-400 underline underline-offset-4 hover:text-neutral-200",
-              ),
-            ],
-            [
-              isSignIn
-                ? "No account? Sign up"
-                : "Already have an account? Sign in",
-            ],
-          ),
-        ],
-      ),
-    ],
-  );
+  return h.submodel({
+    slotId: "login",
+    model: model.loginPage,
+    view: Login.view,
+    toParentMessage: (message) => GotLoginMessage({ message }),
+  });
 };
 
 const loggedInView = (model: LoggedIn): Document => {

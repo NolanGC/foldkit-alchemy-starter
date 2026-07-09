@@ -9,7 +9,7 @@
         "@effect/platform-bun": "4.0.0-beta.88",
         "@effect/platform-node": "4.0.0-beta.88",
         "@effect/sql-pg": "4.0.0-beta.88",
-        "alchemy": "^2.0.0-beta.59",
+        "alchemy": "2.0.0-beta.59",
         "better-auth": "^1.6.23",
         "drizzle-orm": "1.0.0-rc.1",
         "effect": "4.0.0-beta.88",
@@ -33,7 +33,7 @@
         "@effect/platform-bun": "4.0.0-beta.88",
         "@effect/platform-node": "4.0.0-beta.88",
         "@effect/sql-pg": "4.0.0-beta.88",
-        "alchemy": "^2.0.0-beta.59",
+        "alchemy": "2.0.0-beta.59",
         "better-auth": "1.6.23",
         "drizzle-orm": "1.0.0-rc.1",
         "effect": "4.0.0-beta.88",
@@ -48,7 +48,7 @@
         "@foldkit/devtools": "0.122.1",
         "@foldkit/ui": "^0.122.0",
         "@tailwindcss/vite": "^4.3.2",
-        "alchemy": "^2.0.0-beta.59",
+        "alchemy": "2.0.0-beta.59",
         "effect": "4.0.0-beta.88",
         "foldkit": "^0.122.0",
         "tailwindcss": "^4.3.2",
@@ -58,6 +58,21 @@
         "@happy-dom/global-registrator": "^20.10.6",
         "happy-dom": "^20.10.6",
         "vitest": "^4.1.9",
+      },
+    },
+    "packages/create-foldkit-alchemy-app": {
+      "name": "create-foldkit-alchemy-app",
+      "version": "0.1.0",
+      "bin": {
+        "create-foldkit-alchemy-app": "dist/bin.js",
+      },
+      "dependencies": {
+        "@effect/platform-node": "4.0.0-beta.88",
+        "effect": "4.0.0-beta.88",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5",
       },
     },
   },
@@ -615,6 +630,8 @@
     "convert-to-spaces": ["convert-to-spaces@2.0.1", "", {}, "sha512-rcQ1bsQO9799wq24uE5AM2tAILy4gXGIK/njFWcVQkGNZ96edlpY+A7bjwvzjYvLDyzmG1MmMLZhpcsb+klNMQ=="],
 
     "core-util-is": ["core-util-is@1.0.3", "", {}, "sha512-ZQBvi1DcpJ4GDqanjucZ2Hj3wEO5pZDS89BWbkcrvdxksJorwUDDZamX9ldFkp9aw2lmBDLgkObEA4DWNJ9FYQ=="],
+
+    "create-foldkit-alchemy-app": ["create-foldkit-alchemy-app@workspace:packages/create-foldkit-alchemy-app"],
 
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
 

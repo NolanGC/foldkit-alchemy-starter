@@ -8,7 +8,7 @@
     "@foldkit/devtools": "0.122.1",
     "@foldkit/ui": "^0.122.0",
     "@tailwindcss/vite": "^4.3.2",
-    "alchemy": "^2.0.0-beta.59",
+    "alchemy": "2.0.0-beta.59",
     "effect": "4.0.0-beta.88",
     "foldkit": "^0.122.0",
     "tailwindcss": "^4.3.2",

@@ -34,7 +34,7 @@ export default Alchemy.Stack(
     // worker's deterministic `name` (below), this makes both URLs plain
     // strings known before either resource deploys, so Website and
     // ChatService no longer need each other's live Output to configure
-    // VITE_CHAT_SERVICE_URL / FRONTEND_ORIGIN — no circular dependency, no
+    // VITE_API_URL / FRONTEND_ORIGIN — no circular dependency, no
     // bootstrap-order deploy required. Worker names must be DNS-safe, so
     // stage names like `dev_nolanclement` are sanitized. `alchemy dev`
     // serves both workers locally on the strict ports below, so dev
@@ -65,7 +65,7 @@ export default Alchemy.Stack(
         notFoundHandling: "single-page-application",
       },
       env: {
-        VITE_CHAT_SERVICE_URL: chatUrl,
+        VITE_API_URL: chatUrl,
       },
     });
 

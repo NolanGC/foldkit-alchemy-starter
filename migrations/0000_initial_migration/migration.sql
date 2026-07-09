@@ -15,6 +15,20 @@ CREATE TABLE "account" (
 );
 
 --> statement-breakpoint
+CREATE TABLE "chat_messages" (
+	"id" text PRIMARY KEY,
+	"room_id" text NOT NULL,
+	"sender_id" text NOT NULL,
+	"body" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--> statement-breakpoint
+CREATE TABLE "rooms" (
+	"id" text PRIMARY KEY
+);
+
+--> statement-breakpoint
 CREATE TABLE "session" (
 	"id" text PRIMARY KEY,
 	"expires_at" timestamp with time zone NOT NULL,
@@ -50,14 +64,14 @@ CREATE TABLE "verification" (
 --> statement-breakpoint
 CREATE INDEX "account_user_id_idx" ON "account" ("user_id");
 --> statement-breakpoint
+CREATE INDEX "chat_messages_room_created_idx" ON "chat_messages" ("room_id","created_at");
+--> statement-breakpoint
 CREATE INDEX "session_user_id_idx" ON "session" ("user_id");
 --> statement-breakpoint
 ALTER TABLE "account" ADD CONSTRAINT "account_user_id_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE CASCADE;
 --> statement-breakpoint
--- Legacy messages were written with random per-socket sender ids that
--- reference no user; they cannot satisfy the new FK, so drop them.
-DELETE FROM "chat_messages" WHERE "sender_id" NOT IN (SELECT "id" FROM "user");
---> statement-breakpoint
 ALTER TABLE "chat_messages" ADD CONSTRAINT "chat_messages_sender_id_user_id_fkey" FOREIGN KEY ("sender_id") REFERENCES "user"("id") ON DELETE CASCADE;
 --> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_user_id_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE CASCADE;
+--> statement-breakpoint
+INSERT INTO "rooms" ("id") VALUES ('general'), ('random'), ('feature-requests') ON CONFLICT DO NOTHING;

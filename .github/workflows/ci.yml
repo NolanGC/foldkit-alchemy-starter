@@ -16,6 +16,16 @@ jobs:
       - run: bun run lint
       - run: bun run build
 
+  # Generates starter apps from the templates and installs/typechecks them —
+  # catches starter-repo changes that break create-foldkit-alchemy-app.
+  create-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run --cwd packages/create-foldkit-alchemy-app test
+
   test:
     runs-on: ubuntu-latest
     # All test runs share the "test" stage (and now shared remote state), so
