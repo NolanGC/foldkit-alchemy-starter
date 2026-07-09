@@ -21,6 +21,7 @@ import {
   type App,
   type AuthChoice,
   type DbProvider,
+  type StateBackend,
 } from "../src/Generate.ts";
 
 const packageDir = path.resolve(import.meta.dirname, "..");
@@ -32,6 +33,7 @@ const scaffold = async (
   app: App,
   db: DbProvider,
   auth: AuthChoice = "better-auth",
+  state: StateBackend = "local",
 ) => {
   const targetDir = path.join(tmp, name);
   await Effect.runPromise(
@@ -40,6 +42,7 @@ const scaffold = async (
       app,
       db,
       auth,
+      state,
       targetDir,
       templatesDir,
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -82,6 +85,9 @@ test("scaffolds a chat + Neon app", async () => {
   expect(stack).not.toContain("Planetscale");
   expect(stack).toContain("chat-app-web-${dnsSafeStage}");
   expect(stack).toContain("https://chat-app-chat-${dnsSafeStage}");
+  // Default state backend is local (see scaffold()'s default arg).
+  expect(stack).toContain("state: Alchemy.localState(),");
+  expect(stack).not.toContain("Cloudflare.state()");
 
   expect(read(dir, "backend/src/ChatService.ts")).toContain(
     "name: `chat-app-chat-${stage",
@@ -110,6 +116,23 @@ test("scaffolds a chat + Neon app", async () => {
   expect(exists(dir, "backend/.alchemy")).toBe(false);
   expect(exists(dir, "frontend/dist")).toBe(false);
   expect(exists(dir, "bun.lock")).toBe(false);
+});
+
+test("scaffolds a chat app with remote (Cloudflare) state", async () => {
+  const dir = await scaffold(
+    "chat-remote-state",
+    "chat",
+    "neon",
+    "better-auth",
+    "cloudflare",
+  );
+
+  const stack = read(dir, "alchemy.run.ts");
+  expect(stack).toContain("state: Cloudflare.state(),");
+  expect(stack).not.toContain("Alchemy.localState()");
+
+  const readme = read(dir, "README.md");
+  expect(readme).toContain("stored remotely on Cloudflare");
 });
 
 test("scaffolds a chat + PlanetScale app", async () => {

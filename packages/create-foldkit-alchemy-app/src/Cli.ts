@@ -17,9 +17,11 @@ import {
   generate,
   PROJECT_NAME_HINT,
   ProjectName,
+  stateBackends,
   type App,
   type AuthChoice,
   type DbProvider,
+  type StateBackend,
 } from "./Generate.ts";
 
 const decodeProjectName = S.decodeEffect(ProjectName);
@@ -56,6 +58,20 @@ const promptAuth = Prompt.confirm({
 }).pipe(
   Effect.map((withAuth): AuthChoice => (withAuth ? "better-auth" : "none")),
 );
+
+const promptState = Prompt.select<StateBackend>({
+  message: "Where should Alchemy store deployment state?",
+  choices: [
+    {
+      title: "Local (.alchemy/ on disk — simplest, no cross-machine resume)",
+      value: "local",
+    },
+    {
+      title: "Cloudflare (remote — resumable from another machine/checkout)",
+      value: "cloudflare",
+    },
+  ],
+});
 
 // Exit code of a spawned step, with the child sharing our terminal.
 const run = (cwd: string, command: string, ...args: ReadonlyArray<string>) =>
@@ -110,6 +126,12 @@ export const command = Command.make(
       ),
       Flag.optional,
     ),
+    state: Flag.choice("state", stateBackends).pipe(
+      Flag.withDescription(
+        "Where Alchemy stores deployment state (default: local)",
+      ),
+      Flag.optional,
+    ),
     install: Flag.boolean("install").pipe(
       Flag.withDescription("Run `bun install` without asking"),
     ),
@@ -149,14 +171,19 @@ export const command = Command.make(
             ? Effect.succeed<AuthChoice>("better-auth")
             : promptAuth,
       });
+      const state = yield* Option.match(args.state, {
+        onSome: Effect.succeed,
+        onNone: () =>
+          args.yes ? Effect.succeed<StateBackend>("local") : promptState,
+      });
 
       const targetDir = path.resolve(name);
       const templatesDir = path.resolve(import.meta.dirname, "../templates");
 
-      yield* generate({ name, app, auth, db, targetDir, templatesDir });
+      yield* generate({ name, app, auth, db, state, targetDir, templatesDir });
       yield* gitInit(targetDir);
       yield* Console.log(
-        `\nScaffolded ${name} (${app}, ${db}, auth: ${auth}) at ${targetDir}`,
+        `\nScaffolded ${name} (${app}, ${db}, auth: ${auth}, state: ${state}) at ${targetDir}`,
       );
 
       const install =

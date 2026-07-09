@@ -52,6 +52,10 @@ Deploys need `CLOUDFLARE_WORKERS_SUBDOMAIN` in `.env` — your account's
 `workers.dev` subdomain, shown by `wrangler whoami`. See `.env.example` for
 every variable this app reads.
 
+## Deployment state
+
+__STATE_NOTE__
+
 ## Integration tests
 
 `bun run test:integ` deploys a disposable copy of the whole stack (Postgres

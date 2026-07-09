@@ -25,6 +25,9 @@ export type DbProvider = (typeof dbProviders)[number];
 export const authChoices = ["better-auth", "none"] as const;
 export type AuthChoice = (typeof authChoices)[number];
 
+export const stateBackends = ["local", "cloudflare"] as const;
+export type StateBackend = (typeof stateBackends)[number];
+
 const dbTitle: Record<DbProvider, string> = {
   neon: "Neon",
   planetscale: "PlanetScale",
@@ -166,6 +169,23 @@ const removeUnusedDbProvider = (
     return out;
   });
 
+// `Cloudflare.state()` persists deployment state remotely, keyed by (stack
+// name, stage) — shared across every clone/machine using the same names, so
+// unrelated projects that happen to reuse a name and the default
+// `dev_${USER}` stage can see each other's stale resources. `local` avoids
+// that entirely (state lives in `.alchemy/`, gitignored) at the cost of not
+// being resumable from a different machine or checkout.
+const transformStateBackend = (backend: StateBackend, content: string) =>
+  backend === "cloudflare"
+    ? Effect.succeed(content)
+    : replaceCounted(
+        "alchemy.run.ts",
+        content,
+        "state: Cloudflare.state(),",
+        "state: Alchemy.localState(),",
+        1,
+      );
+
 const transformChatAlchemyRun = (name: ProjectName, content: string) =>
   Effect.gen(function* () {
     const file = "alchemy.run.ts";
@@ -259,6 +279,23 @@ const appNotes: Record<App, string> = {
 `,
 };
 
+const stateNote: Record<StateBackend, string> = {
+  local: `Deployment state lives in \`.alchemy/\` on disk (gitignored) — nothing
+to configure, but it only knows what *this* checkout has deployed. Deleting
+the folder or cloning it fresh elsewhere loses track of what's live; you'd
+need to destroy the old deployment manually (Cloudflare / Neon / PlanetScale
+dashboards) before it becomes an orphaned, still-billing resource. Switch to
+\`Cloudflare.state()\` in \`alchemy.run.ts\` if you need to resume deploys
+from another machine or a team needs to share one.`,
+  cloudflare: `Deployment state is stored remotely on Cloudflare, keyed by
+stack name + stage (stage defaults to \`dev_$USER\`) — so \`bun dev\`/\`bun
+run deploy\` are resumable from any machine or fresh checkout. The tradeoff:
+if you ever reuse this project's name for an unrelated app on the same
+Cloudflare account and stage, they'll share state. Switch to
+\`Alchemy.localState()\` in \`alchemy.run.ts\` for a project-local
+alternative (state then lives in \`.alchemy/\`, gitignored).`,
+};
+
 // Chat-app files the todo overlay replaces or has no use for. migrations/
 // and scripts/ go too: the todo schema regenerates its migrations on first
 // deploy, and generate-migration.ts requires an existing snapshot. test/
@@ -300,6 +337,7 @@ export interface GenerateOptions {
   readonly app: App;
   readonly db: DbProvider;
   readonly auth: AuthChoice;
+  readonly state: StateBackend;
   /** Absolute path of the directory to scaffold into. */
   readonly targetDir: string;
   /** The built templates/ directory of this package. */
@@ -311,6 +349,7 @@ export const generate = ({
   auth,
   db,
   name,
+  state,
   targetDir,
   templatesDir,
 }: GenerateOptions) =>
@@ -408,6 +447,7 @@ export const generate = ({
     yield* rewrite("alchemy.run.ts", (c) =>
       removeUnusedDbProvider(db, c, "alchemy.run.ts", "      "),
     );
+    yield* rewrite("alchemy.run.ts", (c) => transformStateBackend(state, c));
     yield* rewrite("test/integ.test.ts", (c) =>
       removeUnusedDbProvider(db, c, "test/integ.test.ts", "    "),
     );
@@ -429,7 +469,8 @@ export const generate = ({
         .replaceAll("__APP_DESCRIPTION__", appDescription[app])
         .replaceAll("__APP_NOTES__", appNotes[app])
         .replaceAll("__DB_TITLE__", dbTitle[db])
-        .replaceAll("__ENV_SETUP__", envSetup[db]),
+        .replaceAll("__ENV_SETUP__", envSetup[db])
+        .replaceAll("__STATE_NOTE__", stateNote[state]),
     );
 
     yield* fs.writeFileString(
