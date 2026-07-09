@@ -3,7 +3,7 @@ import { Effect, Option, Schema as S } from "effect";
 import { Command } from "foldkit";
 import { m } from "foldkit/message";
 
-import { CHAT_SERVICE_URL } from "./config";
+import { API_URL } from "./config";
 
 // The client-side session is a cached copy of the user profile; the actual
 // authority is the http-only cookie BetterAuth set, which the server
@@ -15,7 +15,7 @@ export const Session = S.Struct({
 });
 export type Session = typeof Session.Type;
 
-const SESSION_STORAGE_KEY = "foldkit-chat-session";
+const SESSION_STORAGE_KEY = "foldkit-session";
 
 // MESSAGE
 
@@ -46,7 +46,7 @@ const toSession = (payload: typeof UserPayload.Type): Session => ({
 // cookie across the frontend/chat-service origin split.
 const authFetch = (path: string, init?: RequestInit) =>
   Effect.tryPromise(async () => {
-    const response = await fetch(new URL(path, CHAT_SERVICE_URL), {
+    const response = await fetch(new URL(path, API_URL), {
       credentials: "include",
       ...init,
     });

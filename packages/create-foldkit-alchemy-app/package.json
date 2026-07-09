@@ -1,0 +1,26 @@
+{
+  "name": "create-foldkit-alchemy-app",
+  "version": "0.2.1",
+  "description": "Scaffold a Foldkit + Alchemy + Cloudflare full-stack app",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "create-foldkit-alchemy-app": "dist/bin.js"
+  },
+  "files": ["dist", "templates"],
+  "scripts": {
+    "build": "tsc --noEmit",
+    "build:templates": "bun scripts/build-templates.ts",
+    "build:dist": "bun build src/bin.ts --target=node --packages=external --outdir=dist",
+    "prepublishOnly": "bun run build:templates && bun run build:dist",
+    "test": "bun run build:templates && bun test"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.0-beta.88",
+    "effect": "4.0.0-beta.88"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

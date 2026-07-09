@@ -9,9 +9,9 @@ const outdir = process.argv[2];
 if (outdir === undefined || outdir === "") {
   throw new Error("Usage: bun scripts/prerender.ts <outdir>");
 }
-if (process.env.VITE_CHAT_SERVICE_URL === undefined) {
+if (process.env.VITE_API_URL === undefined) {
   throw new Error(
-    "VITE_CHAT_SERVICE_URL must be set: app modules read it at import time.",
+    "VITE_API_URL must be set: app modules read it at import time.",
   );
 }
 

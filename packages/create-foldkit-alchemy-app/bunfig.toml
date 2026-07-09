@@ -1,0 +1,4 @@
+# Scope `bun test` to test/ — templates/ contains snapshotted app test files
+# that must not run here.
+[test]
+root = "test"

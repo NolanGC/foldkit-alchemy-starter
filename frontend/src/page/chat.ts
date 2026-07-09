@@ -31,7 +31,7 @@ import { m } from "foldkit/message";
 import { ts } from "foldkit/schema";
 import { evo } from "foldkit/struct";
 
-import { CHAT_SERVICE_URL } from "../config";
+import { API_URL } from "../config";
 
 const CONNECTION_TIMEOUT_MS = 5000;
 const RECONNECT_BASE_DELAY_MS = 500;
@@ -461,7 +461,7 @@ export const managedResources = ManagedResource.make<Model, Message>()(
           }),
         acquire: ({ roomId }) =>
           Effect.callback<ChatSocketValue, ChatSocketAcquireError>((resume) => {
-            const url = new URL(CHAT_SERVICE_URL);
+            const url = new URL(API_URL);
             url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
             url.pathname = `/api/chat/${encodeURIComponent(roomId)}`;
             const socket = new WebSocket(url);

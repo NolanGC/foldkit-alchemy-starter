@@ -88,5 +88,9 @@ export const Hyperdrive = Effect.gen(function* () {
   const { origin } = yield* Postgres;
   return yield* Cloudflare.Hyperdrive.Connection("app-hyperdrive", {
     origin,
+    // Hyperdrive caches SELECT results for up to 60s by default and writes
+    // don't invalidate them, so a reload right after a mutation would show
+    // stale rows. The app reads its own writes; correctness wins here.
+    caching: { disabled: true },
   });
 }).pipe(Effect.provide(PostgresLive));

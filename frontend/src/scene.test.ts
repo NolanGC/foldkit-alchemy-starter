@@ -32,8 +32,8 @@ import { describe, test } from "vitest";
 
 import { Option } from "effect";
 
-import { RoomsLoaded, SignInMode, update, view, type Model } from "./main";
-import { Chat } from "./page";
+import { RoomsLoaded, update, view, type Model } from "./main";
+import { Chat, Login } from "./page";
 import { ChatRoute, HomeRoute, LoginRoute, NotFoundRoute } from "./route";
 
 const createdAt = DateTime.makeUnsafe(0);
@@ -65,13 +65,7 @@ const connectedModel: Model = {
 const loggedOutModel: Model = {
   _tag: "LoggedOut",
   route: LoginRoute(),
-  mode: SignInMode(),
-  name: "",
-  email: "",
-  password: "",
-  pending: false,
-  error: Option.none(),
-  checkingSession: false,
+  loginPage: Login.init(false),
   chatPage: Chat.init("general"),
 };
 

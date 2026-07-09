@@ -11,11 +11,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import pg from "pg";
 
+import { Account, Session, User, Verification } from "./auth-schema.ts";
 import { UserId } from "./ChatProtocol.ts";
 import { Hyperdrive } from "./Db.ts";
-import { Account, Session, User, Verification } from "./schema.ts";
 
 export class AuthError extends Data.TaggedError("AuthError")<{
   cause: unknown;
@@ -102,6 +105,23 @@ const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) => {
 
 type AuthInstance = ReturnType<typeof makeAuth>;
 
+export type BetterAuthApi = {
+  /**
+   * Whether `origin` may make credentialed requests against this worker.
+   * Reads the worker environment when called, so only invoke it inside a
+   * request handler (where the runtime env exists).
+   */
+  isAllowedOrigin: (origin: string) => boolean;
+  withAuth: <A>(
+    requestUrl: string,
+    use: (auth: AuthInstance) => Promise<A>,
+  ) => Effect.Effect<A, AuthError, RuntimeContext>;
+  /** Resolve the session cookie on `request` to its user, if any. */
+  sessionUser: (
+    request: Request,
+  ) => Effect.Effect<Option.Option<AuthUser>, AuthError, RuntimeContext>;
+};
+
 /**
  * Effect-native BetterAuth for workers. `withAuth` builds a per-invocation
  * BetterAuth instance over the shared Hyperdrive connection: pg sockets
@@ -109,25 +129,63 @@ type AuthInstance = ReturnType<typeof makeAuth>;
  * pool is opened per request (cheap — Hyperdrive does the real pooling
  * server-side) and closed when the effect settles.
  */
-export class BetterAuth extends Context.Service<
-  BetterAuth,
-  {
-    /**
-     * Whether `origin` may make credentialed requests against this worker.
-     * Reads the worker environment when called, so only invoke it inside a
-     * request handler (where the runtime env exists).
-     */
-    isAllowedOrigin: (origin: string) => boolean;
-    withAuth: <A>(
-      requestUrl: string,
-      use: (auth: AuthInstance) => Promise<A>,
-    ) => Effect.Effect<A, AuthError, RuntimeContext>;
-    /** Resolve the session cookie on `request` to its user, if any. */
-    sessionUser: (
-      request: Request,
-    ) => Effect.Effect<Option.Option<AuthUser>, AuthError, RuntimeContext>;
-  }
->()("BetterAuth") {}
+export class BetterAuth extends Context.Service<BetterAuth, BetterAuthApi>()(
+  "BetterAuth",
+) {}
+
+/**
+ * Request-level helpers shared by every worker that gates routes on the
+ * BetterAuth session. Build once per worker from the yielded `BetterAuth`
+ * service.
+ */
+export const makeAuthGate = (auth: BetterAuthApi) => {
+  // Resolve the caller's session from the request cookie. Runs on every
+  // gated route; BetterAuth's cookie cache answers most lookups without
+  // touching the database.
+  const sessionUser: Effect.Effect<
+    Option.Option<AuthUser>,
+    AuthError,
+    RuntimeContext | HttpServerRequest.HttpServerRequest
+  > = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    return yield* auth.sessionUser(request.source as Request);
+  });
+
+  const unauthorized = HttpServerResponse.text("Unauthorized", {
+    status: 401,
+  });
+
+  // The auth backend failing is a server-side outage, not a client
+  // problem: log it and degrade to a 503 instead of crashing the handler.
+  const authUnavailable = (error: AuthError) =>
+    Effect.logError("Auth backend unavailable", error.cause).pipe(
+      Effect.as(
+        HttpServerResponse.text("Service unavailable", { status: 503 }),
+      ),
+    );
+
+  // Credentialed CORS: the session cookie only flows cross-origin when the
+  // specific origin is echoed back (a wildcard is invalid with
+  // credentials); the allowlist is the deployed frontend.
+  const cors = HttpMiddleware.cors({
+    allowedOrigins: auth.isAllowedOrigin,
+    credentials: true,
+  });
+
+  // BetterAuth owns everything under /api/auth/* (sign-up, sign-in,
+  // sign-out, get-session, and OAuth callbacks later); mount this on that
+  // route.
+  const handleAuthApi = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const source = request.source as Request;
+    const response = yield* auth.withAuth(source.url, (instance) =>
+      instance.handler(source),
+    );
+    return HttpServerResponse.fromWeb(response);
+  }).pipe(Effect.catchTag("AuthError", authUnavailable));
+
+  return { sessionUser, unauthorized, authUnavailable, cors, handleAuthApi };
+};
 
 export const BetterAuthPg = Layer.effect(
   BetterAuth,

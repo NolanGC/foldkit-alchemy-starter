@@ -43,3 +43,7 @@ repos/
 # Session transcripts and scratch notes
 *-local-command-caveat*.txt
 notes/
+
+# VHS tapes/recordings (local demo scripts, not part of the repo)
+*.tape
+*.gif

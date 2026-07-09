@@ -1,0 +1,4 @@
+# Build outputs: templates/ is snapshotted from the repo root by
+# scripts/build-templates.ts; dist/ is the bundled bin.
+templates/
+dist/

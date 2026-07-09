@@ -13,7 +13,30 @@ TODOs:
 - Documentation for agents
 - Payments scaffolding
 
-## Setup
+## Quick start
+
+Scaffold your own app with the CLI — no need to clone this repo:
+
+```sh
+bun create foldkit-alchemy-app@latest my-app
+```
+
+It'll prompt you through the example app (live chat or a CRUD todo list), a
+Postgres provider (Neon or PlanetScale), whether to include BetterAuth, and
+where Alchemy should store deployment state (local by default). Then:
+
+```sh
+cd my-app
+cp .env.example .env   # then fill in the values
+bun dev
+```
+
+## Working on this repo
+
+The sections below are for developing on the starter itself (this repo),
+not for scaffolding a new app — use `bun create` above for that.
+
+### Setup
 
 ```sh
 bun install
@@ -32,7 +55,7 @@ changes. PlanetScale needs
 `PLANETSCALE_API_TOKEN_ID`, `PLANETSCALE_API_TOKEN`, and
 `PLANETSCALE_ORGANIZATION` in `.env` instead of `NEON_API_KEY`.
 
-## Structure
+### Structure
 
 Following the [single-stack monorepo Alchemy example](https://github.com/alchemy-run/alchemy-effect/tree/main/examples/monorepo-single-stack).
 
