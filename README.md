@@ -1,4 +1,4 @@
-# WIP - Foldkit+Alchemy Starter
+# Foldkit+Alchemy Starter
 
 A small full-stack starter (live chat app with channels) that combines Foldkit and Alchemy for building
 apps end-to-end with Effect, running on Cloudflare with Postgres (Neon or
@@ -15,7 +15,7 @@ TODOs:
 
 ## Quick start
 
-Scaffold your own app with the CLI — no need to clone this repo:
+Start your repo with the CLI:
 
 ```sh
 bun create foldkit-alchemy-app@latest
@@ -28,8 +28,7 @@ deployment state (local by default).
 
 ## Working on this repo
 
-The sections below are for developing on the starter itself (this repo),
-not for scaffolding a new app — use `bun create` above for that.
+The sections below are for developing on the starter itself:
 
 ### Setup
 
@@ -65,12 +64,12 @@ test/                 # Alchemy integration tests
 ### Desktop app
 
 `packages/desktop` wraps the same frontend in a native [Tauri](https://tauri.app)
-window — no duplicated UI code. It needs a [Rust toolchain](https://rustup.rs).
+window.
 
 - **Develop:** with `bun dev` running, `bun run dev:desktop` opens the app in
   a native window against the local stack (same Vite dev server, hot reload
   included).
-- **Build:** the desktop app isn't deployed — it's built against a deployed
+- **Build:** builds desktop app against a deployed
   stage with the API URL baked in, then distributed as native bundles:
 
   ```sh
@@ -80,7 +79,6 @@ window — no duplicated UI code. It needs a [Rust toolchain](https://rustup.rs)
 
   Bundles land in `packages/desktop/src-tauri/target/release/bundle/` (macOS:
   `.app` + `.dmg`). Backend deploys reach desktop users immediately (the app
-  is just an API client); UI changes only ship with a new binary — wire up
+  is just an API client). UI changes only ship with a new binary. Set up
   [Tauri's updater plugin](https://tauri.app/plugin/updater/) for
-  self-updates. Shipping to real users on macOS also needs signing and
-  notarization (Apple Developer ID).
+  self-updates. 
