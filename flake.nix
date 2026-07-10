@@ -15,10 +15,19 @@
           packages = [
             pkgs.bun
             pkgs.git
+            pkgs.rustc
+            pkgs.cargo
+            pkgs.rustfmt
+            pkgs.clippy
+            pkgs.rust-analyzer
+            pkgs.pkg-config
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+            pkgs.libiconv
           ];
 
           shellHook = ''
             echo "Using bun $(bun --version)"
+            echo "Using rustc $(rustc --version)"
           '';
         };
       });
