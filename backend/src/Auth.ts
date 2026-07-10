@@ -43,9 +43,23 @@ type MakeAuthOptions = {
 // would let any site ride the SameSite=None session cookie, and even a
 // dev-localhost entry would let a local process hit production with it.
 // Option.none means the binding is missing (a wiring bug): deny everything.
+//
+// The packaged desktop app (packages/desktop) is the one exception: Tauri
+// serves the same frontend bundle from a fixed local origin
+// (`tauri://localhost` on macOS/Linux, `http://tauri.localhost` on Windows).
+// Allowing it does not reopen the wildcard hole: browsers can't fake these
+// origins, and each Tauri app has its own webview cookie jar, so no other
+// process can ride the session cookie. Under `alchemy dev` the desktop shell
+// loads http://localhost:1337 directly and never hits this branch.
+const DESKTOP_ORIGINS: ReadonlySet<string> = new Set([
+  "tauri://localhost",
+  "http://tauri.localhost",
+]);
+
 const makeIsAllowedOrigin =
   (frontendOrigin: Option.Option<string>) =>
   (origin: string): boolean =>
+    DESKTOP_ORIGINS.has(origin) ||
     Option.exists(frontendOrigin, (allowed) => allowed === origin);
 
 const makeAuth = (pool: pg.Pool, options: MakeAuthOptions) => {

@@ -59,6 +59,11 @@ const promptAuth = Prompt.confirm({
   Effect.map((withAuth): AuthChoice => (withAuth ? "better-auth" : "none")),
 );
 
+const promptDesktop = Prompt.confirm({
+  message: "Include a native desktop app (Tauri — needs a Rust toolchain)?",
+  initial: false,
+});
+
 const promptState = Prompt.select<StateBackend>({
   message: "Where should Alchemy store deployment state?",
   choices: [
@@ -126,6 +131,11 @@ export const command = Command.make(
       ),
       Flag.optional,
     ),
+    desktop: Flag.boolean("desktop").pipe(
+      Flag.withDescription(
+        "Include a Tauri desktop shell around the same frontend (default: no)",
+      ),
+    ),
     state: Flag.choice("state", stateBackends).pipe(
       Flag.withDescription(
         "Where Alchemy stores deployment state (default: local)",
@@ -171,6 +181,10 @@ export const command = Command.make(
             ? Effect.succeed<AuthChoice>("better-auth")
             : promptAuth,
       });
+      // A boolean flag can't distinguish "not given" from "no", so the
+      // prompt only appears when the flag is off and prompts are on — the
+      // default answer is no either way.
+      const desktop = args.desktop || (!args.yes && (yield* promptDesktop));
       const state = yield* Option.match(args.state, {
         onSome: Effect.succeed,
         onNone: () =>
@@ -180,10 +194,19 @@ export const command = Command.make(
       const targetDir = path.resolve(name);
       const templatesDir = path.resolve(import.meta.dirname, "../templates");
 
-      yield* generate({ name, app, auth, db, state, targetDir, templatesDir });
+      yield* generate({
+        name,
+        app,
+        auth,
+        db,
+        desktop,
+        state,
+        targetDir,
+        templatesDir,
+      });
       yield* gitInit(targetDir);
       yield* Console.log(
-        `\nScaffolded ${name} (${app}, ${db}, auth: ${auth}, state: ${state}) at ${targetDir}`,
+        `\nScaffolded ${name} (${app}, ${db}, auth: ${auth}, state: ${state}${desktop ? ", desktop" : ""}) at ${targetDir}`,
       );
 
       const install =

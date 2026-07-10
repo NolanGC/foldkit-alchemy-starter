@@ -16,6 +16,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "build:static": "vite build",
     "test": "vitest run"
   },
   "devDependencies": {

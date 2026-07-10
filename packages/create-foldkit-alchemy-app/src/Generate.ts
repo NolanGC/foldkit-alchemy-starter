@@ -224,18 +224,30 @@ const transformChatService = (name: ProjectName, content: string) =>
     1,
   );
 
-const transformRootPackageJson = (name: ProjectName, content: string) =>
+const transformRootPackageJson = (
+  name: ProjectName,
+  desktop: boolean,
+  content: string,
+) =>
   Effect.try({
     try: () => {
       const pkg = JSON.parse(content) as Record<string, unknown>;
       pkg.name = name;
       // The starter repo's packages/ workspace (this CLI) is not part of the
       // template, and its root test script runs test/integ.test.ts, which is
-      // excluded too (it deploys real infrastructure).
-      pkg.workspaces = ["backend", "frontend"];
+      // excluded too (it deploys real infrastructure). The desktop shell
+      // keeps the repo's packages/desktop path so its relative references
+      // (../../frontend) hold verbatim.
+      pkg.workspaces = desktop
+        ? ["backend", "frontend", "packages/desktop"]
+        : ["backend", "frontend"];
       const scripts = pkg.scripts as Record<string, string>;
       scripts.build = "tsc --noEmit";
       scripts.test = "bun run --cwd frontend test";
+      if (!desktop) {
+        delete scripts["dev:desktop"];
+        delete scripts["build:desktop"];
+      }
       // Opt-in (INTEG=1): deploys and destroys a real stack, so it must
       // never run as a side effect of a bare `bun test`.
       scripts["test:integ"] = "INTEG=1 bun test test/integ.test.ts";
@@ -296,6 +308,52 @@ Cloudflare account and stage, they'll share state. Switch to
 alternative (state then lives in \`.alchemy/\`, gitignored).`,
 };
 
+// Rendered into the README's __DESKTOP_NOTE__ slot when the desktop shell
+// ships; empty otherwise (the token sits flush against the next heading).
+const desktopNote = `## Desktop app
+
+\`packages/desktop\` is a [Tauri](https://tauri.app) shell around the same
+frontend — no duplicated UI code. It needs a
+[Rust toolchain](https://rustup.rs) installed.
+
+### Develop
+
+With \`bun dev\` running in another terminal:
+
+\`\`\`sh
+bun run dev:desktop
+\`\`\`
+
+opens the app in a native window against the local stack, hot reload
+included (the window loads the same Vite dev server as the browser).
+
+### Build and distribute
+
+The desktop app isn't deployed — it's built against a deployed stage and
+handed to users. The API URL is baked in at build time:
+
+\`\`\`sh
+bun run deploy   # make sure the stage is live first
+VITE_API_URL=<the deployed API URL printed by deploy> bun run build:desktop
+\`\`\`
+
+Native bundles land in \`packages/desktop/src-tauri/target/release/bundle/\`
+(on macOS: a \`.app\` and \`.dmg\`). Distribute those however you like, e.g.
+attach them to a GitHub Release. Tauri can't cross-compile, so building for
+all three platforms takes a CI matrix (macOS/Windows/Linux runners).
+
+Two things to know before shipping to real users:
+
+- The frontend is bundled statically: backend deploys reach desktop users
+  immediately (the app is just an API client), but UI changes only ship with
+  a new binary. Wire up [Tauri's updater
+  plugin](https://tauri.app/plugin/updater/) for self-updates.
+- macOS refuses unsigned apps downloaded from the internet — signing and
+  notarization need an Apple Developer ID (Tauri has [built-in
+  config](https://tauri.app/distribute/sign/macos/) for both).
+
+`;
+
 // Chat-app files the todo overlay replaces or has no use for. migrations/
 // goes too: the todo schema regenerates its migrations on first deploy.
 // test/ holds the chat integration test; the overlay ships its own.
@@ -336,6 +394,8 @@ export interface GenerateOptions {
   readonly db: DbProvider;
   readonly auth: AuthChoice;
   readonly state: StateBackend;
+  /** Ship the Tauri desktop shell (packages/desktop) alongside the web app. */
+  readonly desktop: boolean;
   /** Absolute path of the directory to scaffold into. */
   readonly targetDir: string;
   /** The built templates/ directory of this package. */
@@ -346,6 +406,7 @@ export const generate = ({
   app,
   auth,
   db,
+  desktop,
   name,
   state,
   targetDir,
@@ -441,7 +502,53 @@ export const generate = ({
       }
     }
 
-    yield* rewrite("package.json", (c) => transformRootPackageJson(name, c));
+    if (desktop) {
+      yield* fs.copy(
+        path.join(templatesDir, "desktop"),
+        path.join(targetDir, "packages/desktop"),
+      );
+      // Rebrand the shell: "Foldkit Chat" is the productName and the window
+      // title in tauri.conf.json; the identifier and crate name follow the
+      // project name.
+      yield* rewrite("packages/desktop/src-tauri/tauri.conf.json", (c) =>
+        Effect.gen(function* () {
+          const file = "packages/desktop/src-tauri/tauri.conf.json";
+          let out = yield* replaceCounted(file, c, "Foldkit Chat", name, 2);
+          out = yield* replaceCounted(
+            file,
+            out,
+            '"dev.foldkit.chat"',
+            `"dev.foldkit.${name}"`,
+            1,
+          );
+          return out;
+        }),
+      );
+      yield* rewrite("packages/desktop/src-tauri/Cargo.toml", (c) =>
+        Effect.gen(function* () {
+          const file = "packages/desktop/src-tauri/Cargo.toml";
+          let out = yield* replaceCounted(
+            file,
+            c,
+            'name = "foldkit-chat-desktop"',
+            `name = "${name}-desktop"`,
+            1,
+          );
+          out = yield* replaceCounted(
+            file,
+            out,
+            "Desktop shell for the Foldkit chat app",
+            `Desktop shell for ${name}`,
+            1,
+          );
+          return out;
+        }),
+      );
+    }
+
+    yield* rewrite("package.json", (c) =>
+      transformRootPackageJson(name, desktop, c),
+    );
     yield* rewrite("alchemy.run.ts", (c) =>
       removeUnusedDbProvider(db, c, "alchemy.run.ts", "      "),
     );
@@ -468,7 +575,8 @@ export const generate = ({
         .replaceAll("__APP_NOTES__", appNotes[app])
         .replaceAll("__DB_TITLE__", dbTitle[db])
         .replaceAll("__ENV_SETUP__", envSetup[db])
-        .replaceAll("__STATE_NOTE__", stateNote[state]),
+        .replaceAll("__STATE_NOTE__", stateNote[state])
+        .replaceAll("__DESKTOP_NOTE__", desktop ? desktopNote : ""),
     );
 
     yield* fs.writeFileString(

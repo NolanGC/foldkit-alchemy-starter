@@ -46,7 +46,7 @@ __APP_NOTES__
 | `bun run lint`           | Lint (oxlint)                                    |
 | `bun run format`         | Format (oxfmt)                                   |
 
-## Cloud deploys
+__DESKTOP_NOTE__## Cloud deploys
 
 Deploys need `CLOUDFLARE_WORKERS_SUBDOMAIN` in `.env` — your account's
 `workers.dev` subdomain, shown by `wrangler whoami`. See `.env.example` for

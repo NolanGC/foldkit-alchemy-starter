@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && tsc --noEmit -p packages/create-foldkit-alchemy-app",
     "deploy": "alchemy deploy --stage production",
     "dev": "alchemy dev",
+    "dev:desktop": "bun run --cwd packages/desktop dev",
+    "build:desktop": "bun run --cwd packages/desktop build",
     "dev:branch": "alchemy dev --stage pr-$(git branch --show-current | tr '[:upper:]/_' '[:lower:]--' | tr -cd 'a-z0-9-')",
     "deploy:branch": "alchemy deploy --stage pr-$(git branch --show-current | tr '[:upper:]/_' '[:lower:]--' | tr -cd 'a-z0-9-')",
     "destroy:branch": "alchemy destroy --stage pr-$(git branch --show-current | tr '[:upper:]/_' '[:lower:]--' | tr -cd 'a-z0-9-')",

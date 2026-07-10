@@ -73,6 +73,20 @@ const gitignore = fs
   .replace(/\n{3,}/g, "\n\n");
 fs.writeFileSync(path.join(baseDir, ".gitignore"), gitignore);
 
+// The optional Tauri desktop shell, snapshotted from packages/desktop into
+// its own overlay (not base — it only ships when the user opts in). Rust
+// build output and Tauri's generated schemas are local artifacts.
+const desktopExcluded = new Set(["target", "gen"]);
+fs.cpSync(
+  path.join(repoRoot, "packages/desktop"),
+  path.join(templatesDir, "desktop"),
+  {
+    recursive: true,
+    filter: (src) =>
+      !isExcluded(src) && !desktopExcluded.has(path.basename(src)),
+  },
+);
+
 // Hand-authored assets: the README (rendered at generate time) and the todo
 // app overlay (template/apps/todo/{common,auth,no-auth} mirror the repo
 // layout and replace the chat app when the user picks todo). Everything the

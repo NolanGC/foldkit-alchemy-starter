@@ -1,0 +1,14 @@
+{
+  "name": "@foldkit/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:frontend": "test -n \"$VITE_API_URL\" && bun run --cwd ../../frontend build:static || { echo 'VITE_API_URL must be set to the deployed chat worker URL (see alchemy.run.ts).' >&2; exit 1; }"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
