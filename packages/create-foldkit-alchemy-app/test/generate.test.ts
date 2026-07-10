@@ -34,6 +34,7 @@ const scaffold = async (
   db: DbProvider,
   auth: AuthChoice = "better-auth",
   state: StateBackend = "local",
+  desktop = false,
 ) => {
   const targetDir = path.join(tmp, name);
   await Effect.runPromise(
@@ -42,6 +43,7 @@ const scaffold = async (
       app,
       db,
       auth,
+      desktop,
       state,
       targetDir,
       templatesDir,
@@ -116,6 +118,49 @@ test("scaffolds a chat + Neon app", async () => {
   expect(exists(dir, "backend/.alchemy")).toBe(false);
   expect(exists(dir, "frontend/dist")).toBe(false);
   expect(exists(dir, "bun.lock")).toBe(false);
+
+  // Desktop is opt-in: no shell, no orphaned scripts pointing at it.
+  expect(exists(dir, "packages")).toBe(false);
+  expect(pkg.scripts["dev:desktop"]).toBeUndefined();
+  expect(pkg.scripts["build:desktop"]).toBeUndefined();
+  expect(readme).not.toContain("Desktop app");
+});
+
+test("scaffolds a chat app with the desktop shell", async () => {
+  const dir = await scaffold(
+    "chat-native",
+    "chat",
+    "neon",
+    "better-auth",
+    "local",
+    true,
+  );
+
+  const pkg = JSON.parse(read(dir, "package.json"));
+  expect(pkg.workspaces).toEqual(["backend", "frontend", "packages/desktop"]);
+  expect(pkg.scripts["dev:desktop"]).toBe("bun run --cwd packages/desktop dev");
+  expect(pkg.scripts["build:desktop"]).toBe(
+    "bun run --cwd packages/desktop build",
+  );
+
+  expect(exists(dir, "packages/desktop/src-tauri/src/main.rs")).toBe(true);
+  expect(exists(dir, "packages/desktop/src-tauri/icons/icon.icns")).toBe(true);
+  // Rust build output and Tauri's generated schemas must not ship.
+  expect(exists(dir, "packages/desktop/src-tauri/target")).toBe(false);
+  expect(exists(dir, "packages/desktop/src-tauri/gen")).toBe(false);
+
+  const conf = read(dir, "packages/desktop/src-tauri/tauri.conf.json");
+  expect(conf).toContain('"productName": "chat-native"');
+  expect(conf).toContain('"identifier": "dev.foldkit.chat-native"');
+  expect(conf).not.toContain("Foldkit Chat");
+
+  expect(read(dir, "packages/desktop/src-tauri/Cargo.toml")).toContain(
+    'name = "chat-native-desktop"',
+  );
+
+  const readme = read(dir, "README.md");
+  expect(readme).toContain("## Desktop app");
+  expect(readme).toContain("dev:desktop");
 });
 
 test("scaffolds a chat app with remote (Cloudflare) state", async () => {
